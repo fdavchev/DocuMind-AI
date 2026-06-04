@@ -14,7 +14,7 @@
 ## 📽️ Demo
 
 <!-- After recording your demo, replace the line below with your actual GIF or video embed -->
-> 🎬 *Demo video coming soon — see [How to Upload a Demo](#-how-to-upload-a-demo-video) below.*
+> 🎬 *Demo video coming soon*
 
 ---
 
@@ -228,4 +228,4 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 ---
 
-> Built with ❤️ using Streamlit + LangChain + FAISS + Ollama — running 100% locally 🔒
+> Built using Streamlit + LangChain + FAISS + Ollama — running 100% locally 🔒
