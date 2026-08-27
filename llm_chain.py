@@ -1,13 +1,18 @@
 # llm_chain.py
 
+import io
+
 import ollama
-from langchain_community.llms import Ollama
-from langchain_ollama import ChatOllama
+from PIL import Image
+from langchain_ollama import OllamaLLM
+
 from config import DEFAULT_MODEL
 
 
 def build_llm(model_name: str = DEFAULT_MODEL):
-    return Ollama(model=model_name)
+    # OllamaLLM, not langchain_community's Ollama: that class is deprecated and
+    # slated for removal, and emitted a warning on every app start.
+    return OllamaLLM(model=model_name)
 
 
 def stream_response(llm, history: list):
@@ -22,10 +27,6 @@ def stream_response(llm, history: list):
 
 
 def stream_vision_response(image_bytes: bytes, user_prompt: str, model_name: str = "llava"):
-    import ollama
-    from PIL import Image
-    import io
-
     # Convert any format (WebP, PNG, etc.) → JPEG bytes, which LLaVA always accepts
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     buffer = io.BytesIO()
