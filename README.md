@@ -92,7 +92,6 @@ DocuMind-AI/
 ├── llm_chain.py        # LangChain logic for the chat tab (text + vision)
 ├── chat_history.py     # In-memory conversation history management & export
 ├── config.py           # All tunable settings (models, prompts, UI labels)
-├── test_llm.py         # Quick sanity-check script for the Ollama connection
 └── requirements.txt    # Pinned Python dependencies
 ```
 

@@ -1,7 +1,6 @@
 # config.py
 
 # Model Settings
-MODEL_NAME = "mistral"        # Change to "mistral" or "phi3" if you pulled a different model
 TEMPERATURE = 0.7            # 0.0 = focused/deterministic, 1.0 = creative/random
 MAX_TOKENS = 512             # Maximum length of each response
 
@@ -20,7 +19,7 @@ AVAILABLE_MODELS = [
 
 DEFAULT_MODEL = "llava"
 
-MODEL_NAME = DEFAULT_MODEL
+MODEL_NAME = DEFAULT_MODEL    # Change DEFAULT_MODEL above to switch models
 
 # System Prompt — edit this to give your assistant a personality
 SYSTEM_PROMPT = """You are a helpful, friendly, local vision-language AI assistant. 
