@@ -108,6 +108,8 @@ DocuMind-AI/
 │   ├── test_integration.py # PDF bytes → answer, with Ollama stubbed
 │   ├── test_errors.py      # failure paths: Ollama down, model missing, bad PDF
 │   └── test_app_smoke.py   # app.py actually starts, with and without Ollama
+├── docs/architecture.md# Architecture chapter draft (components, pipeline, limitations)
+├── DECISIONS.md        # Running log of design decisions and their rationale
 ├── Dockerfile          # App image (Python + Streamlit)
 ├── docker-compose.yml  # App + Ollama + one-shot model pull
 ├── requirements.txt    # Pinned Python dependencies
@@ -306,6 +308,15 @@ See `requirements.txt` for the full pinned list.
 - [x] Docker container for one-command setup
 - [x] Graceful error handling for the common failure paths
 - [ ] Support for scanned PDFs via OCR
+
+---
+
+## 📚 Project Documentation
+
+| Document | What's in it |
+|----------|--------------|
+| [`docs/architecture.md`](docs/architecture.md) | How the system fits together: components, the RAG pipeline, error-handling design, testing strategy, deployment, and known limitations |
+| [`DECISIONS.md`](DECISIONS.md) | Every non-obvious engineering choice, with the alternatives considered and why each was rejected |
 
 ---
 
