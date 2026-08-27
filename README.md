@@ -30,6 +30,7 @@
 - 🔒 **100% local** — zero API keys, zero cloud calls, zero data leakage
 - ⚡ **Streaming responses** — token-by-token output just like ChatGPT
 - 🐳 **One-command setup** — `docker compose up` starts the app, starts Ollama, and pulls the models
+- 🔍 **OCR fallback** — scanned PDFs are read with Tesseract when it's installed, and degrade to a clear message when it isn't
 - 🛟 **Readable failures** — Ollama down, model not pulled, oversized or corrupt PDF all produce an actionable message, never a traceback
 
 ---
@@ -94,6 +95,7 @@ Streamed answer with inline [n] citations  +  a Sources list showing
 DocuMind-AI/
 ├── app.py              # Streamlit UI — two tabs, sidebar, chat loops
 ├── pdf_handler.py      # Per-page PDF extraction + chunking with page metadata
+├── ocr.py              # Optional Tesseract fallback for scanned pages
 ├── vector_store.py     # Embed chunks with nomic-embed-text, store & search FAISS
 ├── rag_chain.py        # Build the cited RAG prompt, stream answer from llama3
 ├── llm_chain.py        # LangChain logic for the chat tab (text + vision)
@@ -107,6 +109,7 @@ DocuMind-AI/
 │   ├── test_rag_chain.py   # prompt construction and citation rendering
 │   ├── test_integration.py # PDF bytes → answer, with Ollama stubbed
 │   ├── test_errors.py      # failure paths: Ollama down, model missing, bad PDF
+│   ├── test_ocr.py         # scanned-page detection and the OCR fallback
 │   └── test_app_smoke.py   # app.py actually starts, with and without Ollama
 ├── docs/architecture.md# Architecture chapter draft (components, pipeline, limitations)
 ├── DECISIONS.md        # Running log of design decisions and their rationale
@@ -178,7 +181,25 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-#### 4 — Pull the models with Ollama
+#### 4 — (Optional) Install Tesseract for scanned PDFs
+
+Only needed if you want to read scanned, image-only PDFs. Text-based PDFs work
+without it, and the app says so clearly rather than failing.
+
+```bash
+# Windows
+winget install UB-Mannheim.TesseractOCR
+
+# macOS
+brew install tesseract
+
+# Linux
+sudo apt install tesseract-ocr
+```
+
+The Docker image installs Tesseract already — nothing to do there.
+
+#### 5 — Pull the models with Ollama
 
 ```bash
 # For the Chat tab
@@ -193,7 +214,7 @@ ollama pull nomic-embed-text   # converts text to vectors for FAISS
 > **Why two models for PDF Q&A?**
 > `nomic-embed-text` is a tiny, fast model whose only job is turning text into numbers (vectors) so FAISS can search by similarity. `llama3` is the model that actually reads the retrieved chunks and writes the answer.
 
-#### 5 — Run the app
+#### 6 — Run the app
 
 ```bash
 streamlit run app.py
@@ -214,7 +235,9 @@ translated into a message that names the problem *and* the fix:
 | A model isn't pulled | *"The model `llama3` isn't installed… `ollama pull llama3`"* |
 | PDF over 25 MB | *"…over the 25 MB limit"* — refused before parsing, so you aren't left watching a spinner |
 | Corrupt / password-protected file | *"…appears to be corrupt, password-protected, or not a PDF"* |
-| Scanned PDF with no text layer | *"…most likely a scanned document"* — OCR isn't supported yet |
+| Scanned PDF, no Tesseract | *"…looks like a scanned document… and OCR isn't available"* — with the install command for your platform |
+| Scanned PDF, OCR read nothing | *"…the scan may be too low-resolution, skewed, or blank"* |
+| Scanned PDF over 50 pages | *"…over the 50-page limit"* — refused rather than starting a ten-minute OCR pass |
 
 Both tabs show a **System check** panel that verifies Ollama is reachable and
 the required models are installed *before* you upload anything, with a re-check
@@ -246,6 +269,7 @@ pytest
 | `test_rag_chain.py` | Citation formatting, prompt rules, streaming from a stubbed Ollama |
 | `test_integration.py` | Full pipeline: PDF bytes → chunks → FAISS → prompt → answer |
 | `test_errors.py` | Failure translation, pre-flight checks, upload validation |
+| `test_ocr.py` | Scanned-page detection, OCR fallback, graceful degradation without Tesseract |
 | `test_app_smoke.py` | Runs `app.py` through Streamlit's script runner — catches broken imports and startup crashes |
 
 ---
@@ -289,6 +313,7 @@ To change the PDF Q&A answer model or the embedding model, edit the constants at
 | `ollama==0.6.2` | Direct Ollama API client |
 | `faiss-cpu` | Local vector similarity search |
 | `pdfplumber` | PDF text extraction (page by page) |
+| `pytesseract` | OCR for scanned PDFs (optional — needs the Tesseract binary) |
 | `pytest` | Test suite (dev only — see `requirements-dev.txt`) |
 | `pillow==12.2.0` | Image handling |
 
@@ -307,7 +332,7 @@ See `requirements.txt` for the full pinned list.
 - [x] Automated test suite (pytest, runs without a live model)
 - [x] Docker container for one-command setup
 - [x] Graceful error handling for the common failure paths
-- [ ] Support for scanned PDFs via OCR
+- [x] Support for scanned PDFs via OCR (optional — needs Tesseract installed)
 
 ---
 
