@@ -20,6 +20,8 @@ import os
 import httpx
 import ollama
 
+import ocr
+
 # Indexing time scales with page count. Past this size the "10-30 seconds"
 # promise in the UI stops being true, so we refuse it up front rather than
 # leaving the user watching a spinner with no idea whether it will finish.
@@ -104,10 +106,35 @@ class UnreadablePdf(FriendlyError):
 class NoTextInPdf(FriendlyError):
     def __init__(self, filename: str):
         super().__init__(
-            f"**No text could be extracted from {filename}.** It's most likely a "
-            "scanned document — an image of a page rather than text.",
-            "OCR isn't supported yet. Try a PDF that was exported from a text "
-            "document rather than scanned.",
+            f"**No text could be extracted from {filename}.** The pages appear "
+            "to be genuinely empty.",
+            "Check the file opens correctly in a PDF reader and actually "
+            "contains text.",
+        )
+
+
+class OcrUnavailable(FriendlyError):
+    """A scanned PDF was detected, but Tesseract isn't installed to read it."""
+
+    def __init__(self, filename: str, scanned_pages: int):
+        super().__init__(
+            f"**{filename} looks like a scanned document** "
+            f"({scanned_pages} page(s) have no text layer), and OCR isn't "
+            "available on this machine.",
+            ocr.unavailable_hint(),
+        )
+
+
+class ScannedPdfTooLong(FriendlyError):
+    """OCR would work, but the document is long enough that it isn't worth it."""
+
+    def __init__(self, filename: str, scanned_pages: int):
+        super().__init__(
+            f"**{filename} needs OCR on {scanned_pages} pages**, over the "
+            f"{ocr.MAX_OCR_PAGES}-page limit. Reading that many scanned pages "
+            "would take several minutes.",
+            "Split it into smaller PDFs, or raise `MAX_OCR_PAGES` in `ocr.py` "
+            "if you're willing to wait.",
         )
 
 
@@ -205,6 +232,33 @@ def readiness(required: list[str]) -> FriendlyError | None:
     except FriendlyError as exc:
         return exc
     return None
+
+
+def no_text_error(filename: str, scanned_pages: int = 0) -> FriendlyError:
+    """
+    Picks the right message when a PDF produced no chunks.
+
+    Three different situations look identical to the caller — the document is
+    scanned and OCR is missing, the document is scanned and OCR read nothing,
+    or the document is genuinely empty — and each needs a different remedy.
+    """
+    if scanned_pages and not ocr.is_available():
+        return OcrUnavailable(filename, scanned_pages)
+    if scanned_pages:
+        return FriendlyError(
+            f"**OCR could not read any text from {filename}.** The scan may be "
+            "too low-resolution, skewed, or blank.",
+            "Try re-scanning at 300 DPI or higher.",
+        )
+    return NoTextInPdf(filename)
+
+
+def ocr_status() -> str:
+    """One-line OCR availability summary for the readiness panel."""
+    version = ocr.tesseract_version()
+    if version:
+        return f"OCR is available (Tesseract {version}) — scanned PDFs are supported."
+    return "OCR is not available — scanned PDFs cannot be read. " + ocr.unavailable_hint()
 
 
 def validate_pdf_upload(uploaded_file) -> None:

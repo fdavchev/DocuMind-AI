@@ -18,9 +18,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# curl is used by the container healthcheck below.
+# curl for the healthcheck below; tesseract-ocr so scanned PDFs work out of
+# the box in the container even when the host has no OCR installed.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first, so a source change doesn't invalidate the pip layer.

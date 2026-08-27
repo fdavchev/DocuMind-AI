@@ -25,27 +25,62 @@ import pdfplumber
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+import ocr
+from errors import ScannedPdfTooLong
+
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
 
-def extract_pages_from_pdf(uploaded_file) -> list[tuple[int, str]]:
+def extract_pages_from_pdf(
+    uploaded_file, use_ocr: bool = True
+) -> list[tuple[int, str]]:
     """
     Reads the PDF and returns [(page_number, page_text), ...].
 
     Page numbers are 1-based, matching what a human sees in a PDF reader.
-    Pages with no extractable text (scanned images, blank pages) are skipped.
+    Pages with no usable text layer fall back to OCR when Tesseract is
+    available; pages that yield nothing either way are skipped.
     `uploaded_file` is the object Streamlit gives us from st.file_uploader.
+
+    Set use_ocr=False to force the text-layer-only path.
     """
     pages: list[tuple[int, str]] = []
 
     with pdfplumber.open(uploaded_file) as pdf:
+        ocr_pages = [
+            page for page in pdf.pages if ocr.page_needs_ocr(page.extract_text())
+        ]
+        ocr_wanted = use_ocr and ocr_pages and ocr.is_available()
+
+        # Refuse up front rather than starting an OCR pass we know will take
+        # minutes — the same principle as the upload size gate.
+        if ocr_wanted and len(ocr_pages) > ocr.MAX_OCR_PAGES:
+            raise ScannedPdfTooLong(
+                getattr(uploaded_file, "name", "The file"), len(ocr_pages)
+            )
+
         for page_number, page in enumerate(pdf.pages, start=1):
             page_text = page.extract_text()
+
+            if ocr.page_needs_ocr(page_text) and ocr_wanted:
+                page_text = ocr.ocr_page(page)
+
             if page_text and page_text.strip():  # image-only pages return None
                 pages.append((page_number, page_text))
 
     return pages
+
+
+def scanned_page_count(uploaded_file) -> int:
+    """
+    How many pages lack a usable text layer.
+
+    Used to tell "this PDF is scanned and we need OCR" apart from "this PDF is
+    genuinely empty", which are different problems with different remedies.
+    """
+    with pdfplumber.open(uploaded_file) as pdf:
+        return sum(1 for page in pdf.pages if ocr.page_needs_ocr(page.extract_text()))
 
 
 def extract_text_from_pdf(uploaded_file) -> str:
@@ -103,15 +138,18 @@ def split_pages_into_chunks(
     return documents
 
 
-def load_pdf_as_documents(uploaded_file, source: str | None = None) -> list[Document]:
+def load_pdf_as_documents(
+    uploaded_file, source: str | None = None, use_ocr: bool = True
+) -> list[Document]:
     """
     One-call convenience: uploaded PDF → citation-ready Documents.
 
     `source` defaults to the uploaded file's name, which is what the UI
-    shows next to the page number.
+    shows next to the page number. Returns [] when nothing could be read —
+    callers use no_text_error() to turn that into the right message.
     """
     if source is None:
         source = getattr(uploaded_file, "name", "document.pdf")
 
-    pages = extract_pages_from_pdf(uploaded_file)
+    pages = extract_pages_from_pdf(uploaded_file, use_ocr=use_ocr)
     return split_pages_into_chunks(pages, source)
