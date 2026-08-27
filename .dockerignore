@@ -1,0 +1,17 @@
+# Keep the build context small and the image clean.
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+.streamlit/
+graphify-out/
+tests/
+pytest.ini
+requirements-dev.txt
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.md
+LICENSE

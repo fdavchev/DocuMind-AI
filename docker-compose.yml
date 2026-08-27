@@ -1,0 +1,70 @@
+# One-command setup:  docker compose up
+#
+# Three services, started in order:
+#   ollama      — the local LLM runtime, with a named volume so model weights
+#                 survive `docker compose down` and are pulled only once
+#   model-init  — a one-shot container that pulls the required models, then exits
+#   app         — the Streamlit UI, which waits until the models are actually
+#                 present so the first question can't fail with "model not found"
+#
+# Everything still runs on your machine. No service in this file talks to the
+# internet except model-init, and only to download the model weights.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: documind-ollama
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    # ── GPU (optional) ────────────────────────────────────────────────────────
+    # Uncomment with the NVIDIA Container Toolkit installed. Without it the
+    # models run on CPU: slower, but functional — which is the right default
+    # for a setup that has to work on an examiner's machine.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  model-init:
+    image: ollama/ollama:latest
+    container_name: documind-model-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    # ~6 GB on first run, cached in the volume afterwards.
+    command: >
+      "ollama pull llama3 &&
+       ollama pull nomic-embed-text &&
+       ollama pull llava"
+    restart: "no"
+
+  app:
+    build: .
+    container_name: documind-app
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      # Both the ollama client and langchain-ollama read this.
+      OLLAMA_HOST: http://ollama:11434
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+volumes:
+  ollama-models:

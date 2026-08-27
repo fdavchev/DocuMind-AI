@@ -21,6 +21,49 @@ from pdf_handler import load_pdf_as_documents
 from vector_store import build_vector_store, add_documents, retrieve_relevant_documents
 from rag_chain import stream_rag_answer_from_documents, format_sources_markdown
 
+# User-readable failures instead of tracebacks (Ollama down, model missing,
+# oversized or corrupt PDF)
+from errors import (
+    CHAT_MODELS,
+    NoTextInPdf,
+    PDF_MODELS,
+    guarded_stream,
+    readiness,
+    translate,
+    validate_pdf_upload,
+)
+
+
+def show_error(exc: Exception, filename: str | None = None) -> None:
+    """Renders any pipeline failure as an actionable message."""
+    st.error(translate(exc, filename).render())
+
+
+def render_status_panel(required_models: list[str], key: str) -> None:
+    """
+    A collapsible pre-flight check, so a broken setup is visible before the
+    user uploads anything. Cached in session state so we don't call the Ollama
+    API on every rerun, with a button to re-check after fixing something.
+    """
+    state_key = f"status_{key}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = readiness(required_models)
+
+    problem = st.session_state[state_key]
+    label = "✅ System ready" if problem is None else "⚠️ Setup needed"
+
+    with st.expander(label, expanded=problem is not None):
+        if problem is None:
+            st.success(
+                f"Ollama is running with {', '.join(required_models)} installed."
+            )
+        else:
+            st.warning(problem.render())
+        if st.button("🔄 Re-check", key=f"recheck_{key}"):
+            st.session_state[state_key] = readiness(required_models)
+            st.rerun()
+
+
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title=APP_TITLE, page_icon=APP_ICON, layout="centered")
 st.title(f"{APP_ICON} {APP_TITLE}")
@@ -89,6 +132,7 @@ with tab_chat:
         )
 
         st.markdown("---")
+        render_status_panel(CHAT_MODELS, key="chat")
         st.caption("Running 100% locally via Ollama 🔒")
 
     # ── Render chat history ────────────────────────────────────────────────────
@@ -106,20 +150,35 @@ with tab_chat:
         )
 
         with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-            if uploaded_image:
-                image_bytes = uploaded_image.getvalue()
-                response = st.write_stream(
-                    stream_vision_response(image_bytes, user_input, model_name="llava")
-                )
-            else:
-                response = st.write_stream(
-                    stream_response(st.session_state.llm, st.session_state.history)
-                )
+            try:
+                if uploaded_image:
+                    image_bytes = uploaded_image.getvalue()
+                    response = st.write_stream(
+                        guarded_stream(
+                            stream_vision_response(
+                                image_bytes, user_input, model_name="llava"
+                            )
+                        )
+                    )
+                else:
+                    response = st.write_stream(
+                        guarded_stream(
+                            stream_response(
+                                st.session_state.llm, st.session_state.history
+                            )
+                        )
+                    )
+            except Exception as exc:
+                show_error(exc)
+                response = None
 
-        st.session_state.history = add_message(
-            st.session_state.history, "assistant", response
-        )
-        st.session_state.export_snapshot = export_history(st.session_state.history)
+        # Only record an answer we actually got — a failed turn leaves the
+        # history clean so the user can simply retry.
+        if response:
+            st.session_state.history = add_message(
+                st.session_state.history, "assistant", response
+            )
+            st.session_state.export_snapshot = export_history(st.session_state.history)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -144,6 +203,8 @@ with tab_pdf:
         # each entry: {"role": ..., "content": ..., "sources": <markdown or None>}
         st.session_state.pdf_chat_history = []
 
+    render_status_panel(PDF_MODELS, key="pdf")
+
     # ── PDF Upload (multiple documents share one index) ────────────────────────
     uploaded_pdfs = st.file_uploader(
         "Upload PDFs",
@@ -159,26 +220,30 @@ with tab_pdf:
         ]
 
         for pdf in new_files:
-            with st.spinner(f"Reading and indexing **{pdf.name}**... (this takes ~10-30 seconds)"):
-                # Step 1 + 2: extract per-page text and chunk it, keeping
-                # {"source": filename, "page": n} on every chunk
-                documents = load_pdf_as_documents(pdf)
+            try:
+                with st.spinner(f"Reading and indexing **{pdf.name}**... (this takes ~10-30 seconds)"):
+                    # Step 0: refuse files too large to index in reasonable time
+                    validate_pdf_upload(pdf)
 
-                if not documents:
-                    st.error(
-                        f"⚠️ Could not extract text from **{pdf.name}**. "
-                        "It may be a scanned image-only PDF."
-                    )
-                    continue
+                    # Step 1 + 2: extract per-page text and chunk it, keeping
+                    # {"source": filename, "page": n} on every chunk
+                    documents = load_pdf_as_documents(pdf)
 
-                # Step 3: embed the chunks — into a new index, or into the
-                # existing one so several PDFs are searchable together
-                if st.session_state.pdf_vector_store is None:
-                    st.session_state.pdf_vector_store = build_vector_store(documents)
-                else:
-                    add_documents(st.session_state.pdf_vector_store, documents)
+                    if not documents:
+                        raise NoTextInPdf(pdf.name)
 
-                st.session_state.pdf_filenames.append(pdf.name)
+                    # Step 3: embed the chunks — into a new index, or into the
+                    # existing one so several PDFs are searchable together
+                    if st.session_state.pdf_vector_store is None:
+                        st.session_state.pdf_vector_store = build_vector_store(documents)
+                    else:
+                        add_documents(st.session_state.pdf_vector_store, documents)
+
+                    st.session_state.pdf_filenames.append(pdf.name)
+            except Exception as exc:
+                # One bad file must not stop the rest of the batch from indexing.
+                show_error(exc, pdf.name)
+                continue
 
             st.success(f"✅ **{pdf.name}** indexed — {len(documents)} chunks created.")
 
@@ -211,23 +276,35 @@ with tab_pdf:
 
             # Retrieve relevant chunks from FAISS. With several PDFs indexed
             # we widen the window so one long document can't crowd the others out.
-            k = 4 if len(st.session_state.pdf_filenames) <= 1 else 6
-            docs = retrieve_relevant_documents(
-                st.session_state.pdf_vector_store, pdf_question, k=k
-            )
-            sources_markdown = format_sources_markdown(docs)
-
-            # Stream the LLM's answer, then show the passages it was given
+            # Embedding the question needs Ollama, so retrieval can fail too.
             with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-                response = st.write_stream(
-                    stream_rag_answer_from_documents(docs, pdf_question)
-                )
-                with st.expander("📚 Sources"):
-                    st.markdown(sources_markdown)
+                response, sources_markdown = None, None
+                try:
+                    k = 4 if len(st.session_state.pdf_filenames) <= 1 else 6
+                    docs = retrieve_relevant_documents(
+                        st.session_state.pdf_vector_store, pdf_question, k=k
+                    )
+                    sources_markdown = format_sources_markdown(docs)
 
-            st.session_state.pdf_chat_history.append(
-                {"role": "assistant", "content": response, "sources": sources_markdown}
-            )
+                    # Stream the answer, then show the passages it was given
+                    response = st.write_stream(
+                        guarded_stream(
+                            stream_rag_answer_from_documents(docs, pdf_question)
+                        )
+                    )
+                    with st.expander("📚 Sources"):
+                        st.markdown(sources_markdown)
+                except Exception as exc:
+                    show_error(exc)
+
+            if response:
+                st.session_state.pdf_chat_history.append(
+                    {
+                        "role": "assistant",
+                        "content": response,
+                        "sources": sources_markdown,
+                    }
+                )
 
     # ── Clear PDF session ──────────────────────────────────────────────────────
     if st.session_state.pdf_vector_store is not None:
