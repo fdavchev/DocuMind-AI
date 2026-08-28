@@ -1,16 +1,17 @@
 # app.py
 #
-# Main Streamlit entry point.
-# Two tabs:
-#   Tab 1 — 🤖 Chat    : image + text chat
-#   Tab 2 — 📄 PDF Q&A : RAG pipeline for document question-answering
+# Main Streamlit entry point. Two modes:
+#   🤖 Chat    — image + text chat
+#   📄 PDF Q&A — RAG pipeline for document question-answering
 #
-# LAYOUT NOTES:
-# The conversation lives in a fixed-height scrolling container and the input sits
-# directly beneath it. That way the input stays put no matter how long the
-# conversation gets, instead of being pushed further down the page with every
-# answer. Setup controls (uploads, status, model choice) live in the sidebar or
-# in a collapsible panel, so the reading area stays uncluttered.
+# WHY A MODE SELECTOR INSTEAD OF st.tabs:
+# Streamlit only pins st.chat_input to the bottom of the viewport when the
+# widget is a top-level element — see streamlit/elements/widgets/chat.py, which
+# picks position="bottom" only when the root container is MAIN and there are no
+# ancestor block types. Inside st.tabs the input is "inline", so it scrolls with
+# the page and drifts out of reach as the conversation grows. Selecting the mode
+# with a segmented control keeps the same two-mode UX while letting the single
+# chat input live at top level, where Streamlit pins it for real.
 
 from datetime import datetime
 
@@ -20,11 +21,12 @@ from config import (
     APP_TITLE, APP_ICON,
     USER_AVATAR, ASSISTANT_AVATAR,
     AVAILABLE_MODELS, DEFAULT_MODEL,
+    CHAT_MODE, PDF_MODE,
 )
 from chat_history import init_memory, add_message, get_history, clear_history, export_history
 from llm_chain import build_llm, stream_response, stream_vision_response
 
-# Imports for the PDF Q&A tab (RAG with source citations)
+# Imports for the PDF Q&A mode (RAG with source citations)
 from pdf_handler import load_pdf_as_documents, scanned_page_count
 from vector_store import build_vector_store, add_documents, retrieve_relevant_documents
 from rag_chain import stream_rag_answer_from_documents, format_sources_markdown
@@ -42,12 +44,8 @@ from errors import (
     validate_pdf_upload,
 )
 
-# Height of the scrolling conversation area, in pixels. Fixed on purpose: it is
-# what keeps the input box in the same place all session.
-CHAT_HEIGHT = 430
-
 # One readiness check covering everything the app needs, so the user sees a
-# single verdict rather than one panel per tab.
+# single verdict rather than one panel per mode.
 REQUIRED_MODELS = list(dict.fromkeys(CHAT_MODELS + PDF_MODELS))
 
 
@@ -102,14 +100,7 @@ st.set_page_config(page_title=APP_TITLE, page_icon=APP_ICON, layout="centered")
 st.markdown(
     """
     <style>
-      /* Tighten the gap above the title */
       .block-container { padding-top: 2.5rem; }
-
-      /* Make the tab labels easier to hit and read */
-      .stTabs [data-baseweb="tab"] {
-          font-size: 1rem;
-          padding: 0.4rem 1rem;
-      }
 
       /* Sources panels sit under answers — keep them quiet */
       [data-testid="stExpander"] summary p { font-size: 0.85rem; }
@@ -142,7 +133,7 @@ if "pdf_chat_history" not in st.session_state:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR — shared by both tabs, so the status check appears exactly once
+# SIDEBAR — shared by both modes, so the status check appears exactly once
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -155,7 +146,7 @@ with st.sidebar:
         options=AVAILABLE_MODELS,
         index=AVAILABLE_MODELS.index(st.session_state.selected_model),
         label_visibility="collapsed",
-        help="Used by the Chat tab. PDF answers always use llama3.",
+        help="Used by Chat mode. PDF answers always use llama3.",
     )
     if chosen_model != st.session_state.selected_model:
         st.session_state.selected_model = chosen_model
@@ -191,68 +182,32 @@ with st.sidebar:
     st.caption("Running 100% locally via Ollama 🔒")
 
 
-tab_chat, tab_pdf = st.tabs(["🤖 Chat", "📄 PDF Q&A"])
+# ── Mode selector ──────────────────────────────────────────────────────────────
+mode = st.segmented_control(
+    "Mode",
+    options=[CHAT_MODE, PDF_MODE],
+    default=CHAT_MODE,
+    label_visibility="collapsed",
+)
+# A segmented control can be deselected; fall back rather than render nothing.
+mode = mode or CHAT_MODE
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — Chat (image + text)
+# CHAT MODE — image + text
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_chat:
+if mode == CHAT_MODE:
+    if not st.session_state.history:
+        st.caption("Ask anything, or upload an image in the sidebar to talk about it.")
 
-    # The conversation scrolls inside this box; the input below never moves.
-    chat_box = st.container(height=CHAT_HEIGHT, border=False)
-    with chat_box:
-        if not st.session_state.history:
-            st.caption("Ask anything, or upload an image in the sidebar to talk about it.")
-        for msg in get_history(st.session_state.history):
-            render_message(msg)
-
-    if user_input := st.chat_input("Ask about the image or just chat..."):
-        with chat_box:
-            with st.chat_message("user", avatar=USER_AVATAR):
-                st.markdown(user_input)
-            st.session_state.history = add_message(
-                st.session_state.history, "user", user_input
-            )
-
-            with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-                try:
-                    if uploaded_image:
-                        response = st.write_stream(
-                            guarded_stream(
-                                stream_vision_response(
-                                    uploaded_image.getvalue(),
-                                    user_input,
-                                    model_name="llava",
-                                )
-                            )
-                        )
-                    else:
-                        response = st.write_stream(
-                            guarded_stream(
-                                stream_response(
-                                    st.session_state.llm, st.session_state.history
-                                )
-                            )
-                        )
-                except Exception as exc:
-                    show_error(exc)
-                    response = None
-
-        # Only record an answer we actually got — a failed turn leaves the
-        # history clean so the user can simply retry.
-        if response:
-            st.session_state.history = add_message(
-                st.session_state.history, "assistant", response
-            )
-            st.session_state.export_snapshot = export_history(st.session_state.history)
+    for msg in get_history(st.session_state.history):
+        render_message(msg)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — PDF Q&A (RAG pipeline)
+# PDF Q&A MODE — RAG pipeline
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_pdf:
-
+else:
     indexed = st.session_state.pdf_filenames
 
     # Setup collapses once documents are loaded, so the conversation gets the
@@ -270,7 +225,8 @@ with tab_pdf:
 
         if uploaded_pdfs:
             new_files = [
-                pdf for pdf in uploaded_pdfs if pdf.name not in st.session_state.pdf_filenames
+                pdf for pdf in uploaded_pdfs
+                if pdf.name not in st.session_state.pdf_filenames
             ]
 
             for pdf in new_files:
@@ -314,55 +270,92 @@ with tab_pdf:
                 st.session_state.pdf_chat_history = []
                 st.rerun()
 
-    # Same pattern as the chat tab: scrolling history, fixed input beneath it.
-    pdf_box = st.container(height=CHAT_HEIGHT, border=False)
-    with pdf_box:
-        if not st.session_state.pdf_chat_history:
-            st.caption(
-                "Answers cite the file and page they came from — open **📚 Sources** "
-                "under any answer to check it."
-            )
-        for msg in st.session_state.pdf_chat_history:
-            render_message(msg)
+    if not st.session_state.pdf_chat_history:
+        st.caption(
+            "Answers cite the file and page they came from — open **📚 Sources** "
+            "under any answer to check it."
+        )
 
-    if st.session_state.pdf_vector_store is None:
-        st.chat_input("Upload a PDF above to start asking questions...", disabled=True)
-    elif pdf_question := st.chat_input("Ask a question about the documents..."):
-        with pdf_box:
-            with st.chat_message("user", avatar=USER_AVATAR):
-                st.markdown(pdf_question)
-            st.session_state.pdf_chat_history.append(
-                {"role": "user", "content": pdf_question, "sources": None}
-            )
+    for msg in st.session_state.pdf_chat_history:
+        render_message(msg)
 
-            # Retrieve relevant chunks from FAISS. With several PDFs indexed we
-            # widen the window so one long document can't crowd the others out.
-            # Embedding the question needs Ollama, so retrieval can fail too.
-            with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-                response, sources_markdown = None, None
-                try:
-                    k = 4 if len(st.session_state.pdf_filenames) <= 1 else 6
-                    docs = retrieve_relevant_documents(
-                        st.session_state.pdf_vector_store, pdf_question, k=k
-                    )
-                    sources_markdown = format_sources_markdown(docs)
 
-                    # Stream the answer, then show the passages it was given
-                    response = st.write_stream(
-                        guarded_stream(
-                            stream_rag_answer_from_documents(docs, pdf_question)
+# ══════════════════════════════════════════════════════════════════════════════
+# THE INPUT — top level on purpose, which is what pins it to the viewport
+# ══════════════════════════════════════════════════════════════════════════════
+awaiting_pdf = mode == PDF_MODE and st.session_state.pdf_vector_store is None
+
+if awaiting_pdf:
+    placeholder = "Upload a PDF above to start asking questions..."
+elif mode == PDF_MODE:
+    placeholder = "Ask a question about the documents..."
+else:
+    placeholder = "Ask about the image or just chat..."
+
+prompt = st.chat_input(placeholder, disabled=awaiting_pdf)
+
+if prompt and mode == CHAT_MODE:
+    with st.chat_message("user", avatar=USER_AVATAR):
+        st.markdown(prompt)
+    st.session_state.history = add_message(st.session_state.history, "user", prompt)
+
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+        try:
+            if uploaded_image:
+                response = st.write_stream(
+                    guarded_stream(
+                        stream_vision_response(
+                            uploaded_image.getvalue(), prompt, model_name="llava"
                         )
                     )
-                    with st.expander("📚 Sources"):
-                        st.markdown(sources_markdown)
-                except Exception as exc:
-                    show_error(exc)
+                )
+            else:
+                response = st.write_stream(
+                    guarded_stream(
+                        stream_response(st.session_state.llm, st.session_state.history)
+                    )
+                )
+        except Exception as exc:
+            show_error(exc)
+            response = None
 
-        if response:
-            st.session_state.pdf_chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": response,
-                    "sources": sources_markdown,
-                }
+    # Only record an answer we actually got — a failed turn leaves the history
+    # clean so the user can simply retry.
+    if response:
+        st.session_state.history = add_message(
+            st.session_state.history, "assistant", response
+        )
+        st.session_state.export_snapshot = export_history(st.session_state.history)
+
+elif prompt:
+    with st.chat_message("user", avatar=USER_AVATAR):
+        st.markdown(prompt)
+    st.session_state.pdf_chat_history.append(
+        {"role": "user", "content": prompt, "sources": None}
+    )
+
+    # Retrieve relevant chunks from FAISS. With several PDFs indexed we widen
+    # the window so one long document can't crowd the others out. Embedding the
+    # question needs Ollama, so retrieval can fail too.
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+        response, sources_markdown = None, None
+        try:
+            k = 4 if len(st.session_state.pdf_filenames) <= 1 else 6
+            docs = retrieve_relevant_documents(
+                st.session_state.pdf_vector_store, prompt, k=k
             )
+            sources_markdown = format_sources_markdown(docs)
+
+            # Stream the answer, then show the passages it was given
+            response = st.write_stream(
+                guarded_stream(stream_rag_answer_from_documents(docs, prompt))
+            )
+            with st.expander("📚 Sources"):
+                st.markdown(sources_markdown)
+        except Exception as exc:
+            show_error(exc)
+
+    if response:
+        st.session_state.pdf_chat_history.append(
+            {"role": "assistant", "content": response, "sources": sources_markdown}
+        )

@@ -50,7 +50,7 @@ module owns one step and can be tested in isolation.
 
 | Module | Responsibility | Depends on |
 |---|---|---|
-| `app.py` | Streamlit UI: two tabs, upload handling, chat loops, error rendering | every module below |
+| `app.py` | Streamlit UI: mode selector, upload handling, chat loops, error rendering | every module below |
 | `pdf_handler.py` | PDF → per-page text → chunked `Document`s tagged with source and page | pdfplumber, LangChain splitter |
 | `vector_store.py` | Chunks → embeddings → FAISS index; similarity retrieval | langchain-ollama, FAISS |
 | `rag_chain.py` | Retrieved chunks → cited prompt → streamed answer | ollama |
