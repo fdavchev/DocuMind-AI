@@ -16,8 +16,14 @@ services:
     container_name: documind-ollama
     volumes:
       - ollama-models:/root/.ollama
-    ports:
-      - "11434:11434"
+    # Deliberately NOT publishing 11434 to the host: anyone running the Ollama
+    # desktop app already owns that port, and a published mapping would make
+    # `docker compose up` fail with a bind error. The app reaches this service
+    # by name over the compose network, so the mapping buys nothing. Uncomment
+    # only to poke the containerised Ollama from the host, with the desktop app
+    # stopped.
+    # ports:
+    #   - "11434:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
