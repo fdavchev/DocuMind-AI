@@ -91,3 +91,42 @@ def test_chat_input_is_disabled_until_a_pdf_is_uploaded(app_with_ollama_ready):
     # throwing when someone types into it during a demo.
     placeholders = [element.placeholder for element in at.chat_input]
     assert any("Upload a PDF above" in text for text in placeholders)
+
+
+# ── Layout regressions ─────────────────────────────────────────────────────────
+
+def test_the_readiness_check_is_rendered_exactly_once(app_with_ollama_ready):
+    """
+    The status panel used to be rendered per tab, so the user saw two competing
+    "System ready" panels. There is one check for the whole app now.
+    """
+    at = app_with_ollama_ready.run()
+
+    ready_messages = [s.value for s in at.success if "Ollama is running" in s.value]
+    assert len(ready_messages) == 1, ready_messages
+
+
+def test_one_status_panel_covers_every_model_the_app_needs(app_with_ollama_ready):
+    at = app_with_ollama_ready.run()
+
+    message = next(s.value for s in at.success if "Ollama is running" in s.value)
+    for model in ("llava", "llama3", "nomic-embed-text"):
+        assert model in message
+
+
+def test_a_model_missing_for_either_tab_is_reported_once(monkeypatch):
+    # Only the chat model is installed; the PDF models are not.
+    monkeypatch.setattr(errors.ollama, "list", lambda: FakeListResponse(["llava"]))
+
+    at = AppTest.from_file(APP, default_timeout=60).run()
+
+    warnings = [w.value for w in at.warning]
+    assert len(warnings) == 1, warnings
+    assert "ollama pull llama3" in warnings[0]
+
+
+def test_both_tabs_offer_a_chat_input(app_with_ollama_ready):
+    # One per tab: the chat tab's, and the PDF tab's disabled placeholder.
+    at = app_with_ollama_ready.run()
+
+    assert len(at.chat_input) == 2
