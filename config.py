@@ -6,6 +6,12 @@ MAX_TOKENS = 512             # Maximum length of each response
 
 # App Settings
 APP_TITLE = "Local AI Chatbot"
+
+# The two modes of the app. Defined here rather than in app.py so tests can
+# reference them without importing (and therefore executing) the Streamlit
+# script.
+CHAT_MODE = "🤖 Chat"
+PDF_MODE = "📄 PDF Q&A"
 APP_ICON = "🤖"
 USER_AVATAR = "🧑"
 ASSISTANT_AVATAR = "🤖"

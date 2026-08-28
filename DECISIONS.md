@@ -295,3 +295,43 @@ layer would be OCR'd on one machine and skipped on another. A test suite whose
 results depend on undeclared host state is not evidence of anything. Tests that
 exercise OCR re-patch the function themselves, and because fixtures apply before
 the test body, theirs wins.
+
+---
+
+## 16 — A mode selector instead of tabs, so the input can be pinned
+*2026-08-28*
+
+The two modes are chosen with a segmented control at the top of the page
+rather than `st.tabs`, and the single `st.chat_input` lives at module top level.
+
+**Why:** Streamlit pins the chat input to the bottom of the viewport only when
+the widget is created directly in the main container. From
+`streamlit/elements/widgets/chat.py`:
+
+```python
+ancestor_block_types = set(self.dg._active_dg._ancestor_block_types)
+if (self.dg._active_dg._root_container == RootContainer.MAIN
+        and not ancestor_block_types):
+    position = "bottom"
+else:
+    position = "inline"
+```
+
+Inside `st.tabs` the input is therefore always `inline`: it sits in the document
+flow and scrolls out of reach as the conversation grows, so the user has to
+scroll back down to type. No amount of CSS fixes this cleanly, because the
+widget is simply in the wrong place in the tree.
+
+**Alternatives rejected:** pinning the inline input with `position: fixed` CSS,
+which means owning the width, background and z-index by hand and re-doing it
+whenever Streamlit's DOM changes; and a fixed-height scrolling container, which
+was tried first and only stabilised the input relative to the message list, not
+to the viewport.
+
+**Cost:** the UI is no longer literally tabbed, and the mode name is now shared
+state in `config.py`. Both cheap. The behaviour is what a chat interface is
+expected to do.
+
+**Pinned by a test** that asserts the *condition* rather than the symptom:
+`test_the_input_is_top_level_so_streamlit_pins_it` captures the input's ancestor
+block types at creation and fails if it is ever nested again.

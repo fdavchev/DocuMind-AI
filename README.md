@@ -37,9 +37,9 @@
 
 ## 🧠 How It Works
 
-The app has two modes, accessible via tabs in the UI.
+The app has two modes, chosen with the selector at the top of the page.
 
-### Tab 1 — 🤖 Chat (image + text)
+### 🤖 Chat mode (image + text)
 
 ```
 User Input
@@ -52,7 +52,7 @@ Streamlit UI  ──►  LangChain  ──►  Ollama (local LLM / LLaVA)
 Chat History  ──►  Export to .txt
 ```
 
-### Tab 2 — 📄 PDF Q&A (RAG pipeline)
+### 📄 PDF Q&A mode (RAG pipeline)
 
 ```
 PDF Upload (one or many)
@@ -93,7 +93,7 @@ Streamed answer with inline [n] citations  +  a Sources list showing
 
 ```
 DocuMind-AI/
-├── app.py              # Streamlit UI — two tabs, sidebar, chat loops
+├── app.py              # Streamlit UI — mode selector, sidebar, chat loops
 ├── pdf_handler.py      # Per-page PDF extraction + chunking with page metadata
 ├── ocr.py              # Optional Tesseract fallback for scanned pages
 ├── vector_store.py     # Embed chunks with nomic-embed-text, store & search FAISS
