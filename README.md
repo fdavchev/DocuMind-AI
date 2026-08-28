@@ -340,6 +340,7 @@ See `requirements.txt` for the full pinned list.
 
 | Document | What's in it |
 |----------|--------------|
+| [`docs/project-report.md`](docs/project-report.md) | What was built phase by phase, what is verified and how, measured performance, environment gotchas, and a step-by-step manual testing guide |
 | [`docs/architecture.md`](docs/architecture.md) | How the system fits together: components, the RAG pipeline, error-handling design, testing strategy, deployment, and known limitations |
 | [`DECISIONS.md`](DECISIONS.md) | Every non-obvious engineering choice, with the alternatives considered and why each was rejected |
 

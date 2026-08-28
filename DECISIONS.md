@@ -273,11 +273,13 @@ even though `extract_text()` returned something.
 caller but need different remedies: install Tesseract, re-scan at higher DPI, or
 check the file. `errors.no_text_error` picks between them.
 
-**Not verified against a real scan:** Tesseract isn't installed on the
-development machine, so the tests cover detection, the fallback path, page-number
-preservation, the page limit, and graceful degradation — everything except
-Tesseract's actual reading accuracy. That last step needs a real scanned PDF on a
-machine with the binary present.
+**Verified against a real scan (2026-08-27):** with Tesseract 5.4.0 installed,
+an image-only PDF — a rendered picture of text carrying no text layer at all —
+was run through the full pipeline. Both pages were read character-for-character
+correctly, and the recovered text kept its page number, so a citation from a
+scanned document is as accurate as one from a text document. Measured cost was
+roughly 0.55 s per page at 300 DPI. Without the binary the same file yielded
+nothing, which is the intended degradation rather than a failure.
 
 ---
 

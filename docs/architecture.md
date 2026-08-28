@@ -276,7 +276,7 @@ than one found by the committee.
 
 | Limitation | Consequence | Possible resolution |
 |---|---|---|
-| No OCR for scanned PDFs | Image-only documents cannot be indexed | Tesseract fallback when extraction yields no text |
+| OCR needs a native binary | Scanned PDFs are unreadable unless Tesseract is installed (the Docker image bundles it) | Ship the container, or document the install |
 | FAISS has no cheap delete | Removing a file from the uploader does not un-index it; only a full clear does | Rebuild the index on removal, or move to a store with deletion |
 | Index is not persisted | Re-indexing on every session, 10–30 s per document | `FAISS.save_local`, if the use case shifts to a fixed corpus |
 | No answer-quality evaluation | Retrieval and grounding are untested for accuracy | A small labelled question set with retrieval precision@k |
