@@ -55,7 +55,7 @@ module owns one step and can be tested in isolation.
 | `vector_store.py` | Chunks → embeddings → FAISS index; similarity retrieval | langchain-ollama, FAISS |
 | `rag_chain.py` | Retrieved chunks → cited prompt → streamed answer | ollama |
 | `llm_chain.py` | The chat tab's text and vision paths | langchain-ollama, ollama, Pillow |
-| `chat_history.py` | In-memory conversation history and text export | — |
+| `documind/chat/` | `ChatSession` — the conversation, the only object that can change it, and its text export | — |
 | `errors.py` | Failure translation and pre-flight readiness checks | ollama, httpx |
 | `config.py` | Tunable settings: models, prompts, UI labels | — |
 

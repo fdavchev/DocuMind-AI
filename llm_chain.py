@@ -1,11 +1,13 @@
 # llm_chain.py
 
 import io
+from collections.abc import Sequence
 
 import ollama
 from PIL import Image
 from langchain_ollama import OllamaLLM
 
+from documind.chat.message import Message
 from documind.config import AppConfig
 
 
@@ -19,13 +21,15 @@ def build_llm(model_name: str | None = None, config: AppConfig = AppConfig()):
     )
 
 
-def stream_response(llm, history: list, config: AppConfig = AppConfig()):
+def stream_response(
+    llm, messages: Sequence[Message], config: AppConfig = AppConfig()
+):
     # OllamaLLM has no system-message parameter, so the system prompt is the
     # first line of the prompt itself.
     prompt_parts = [config.system_prompt, ""]
-    for msg in history:
-        role_label = "User" if msg["role"] == "user" else "Assistant"
-        prompt_parts.append(f"{role_label}: {msg['content']}")
+    for message in messages:
+        role_label = "User" if message.role == "user" else "Assistant"
+        prompt_parts.append(f"{role_label}: {message.content}")
     prompt_parts.append("Assistant:")
     prompt = "\n".join(prompt_parts)
     for chunk in llm.stream(prompt):

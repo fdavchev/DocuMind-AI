@@ -21,8 +21,9 @@ from config import (
     USER_AVATAR, ASSISTANT_AVATAR,
     CHAT_MODE, PDF_MODE,
 )
+from documind.chat.chat_session import ChatSession
+from documind.chat.message import Message
 from documind.config import AppConfig
-from chat_history import init_memory, add_message, get_history, clear_history, export_history
 from llm_chain import build_llm, stream_response, stream_vision_response
 
 # Imports for the PDF Q&A mode (RAG with source citations)
@@ -85,8 +86,15 @@ def render_status_panel() -> None:
             st.rerun()
 
 
-def render_message(msg: dict) -> None:
-    """One chat bubble, with its Sources panel when the message has citations."""
+def render_chat_message(message: Message) -> None:
+    """One bubble of the Chat-mode conversation."""
+    avatar = USER_AVATAR if message.role == "user" else ASSISTANT_AVATAR
+    with st.chat_message(message.role, avatar=avatar):
+        st.markdown(message.content)
+
+
+def render_pdf_message(msg: dict) -> None:
+    """One PDF Q&A bubble, with its Sources panel when the answer has citations."""
     avatar = USER_AVATAR if msg["role"] == "user" else ASSISTANT_AVATAR
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
@@ -120,14 +128,12 @@ st.markdown(
 st.title(f"{config.app_icon} {config.app_title}")
 
 # ── Session state ──────────────────────────────────────────────────────────────
-if "history" not in st.session_state:
-    st.session_state.history = init_memory()
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = ChatSession(system_prompt=config.system_prompt)
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = config.default_model
 if "llm" not in st.session_state:
     st.session_state.llm = build_llm(st.session_state.selected_model, config=config)
-if "export_snapshot" not in st.session_state:
-    st.session_state.export_snapshot = ""
 if "pdf_vector_store" not in st.session_state:
     st.session_state.pdf_vector_store = None
 if "pdf_filenames" not in st.session_state:
@@ -169,14 +175,13 @@ with st.sidebar:
 
     st.markdown("---")
     if st.button("🗑️ Clear chat", use_container_width=True):
-        st.session_state.history = clear_history(st.session_state.history)
-        st.session_state.export_snapshot = ""
+        st.session_state.chat_session.clear()
         st.rerun()
 
-    has_history = bool(st.session_state.history)
+    has_history = not st.session_state.chat_session.is_empty
     st.download_button(
         label="💾 Save chat",
-        data=st.session_state.export_snapshot if has_history else "",
+        data=st.session_state.chat_session.export() if has_history else "",
         file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
         mime="text/plain",
         use_container_width=True,
@@ -202,11 +207,11 @@ mode = mode or CHAT_MODE
 # CHAT MODE — image + text
 # ══════════════════════════════════════════════════════════════════════════════
 if mode == CHAT_MODE:
-    if not st.session_state.history:
+    if st.session_state.chat_session.is_empty:
         st.caption("Ask anything, or upload an image in the sidebar to talk about it.")
 
-    for msg in get_history(st.session_state.history):
-        render_message(msg)
+    for message in st.session_state.chat_session.messages:
+        render_chat_message(message)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -284,7 +289,7 @@ else:
         )
 
     for msg in st.session_state.pdf_chat_history:
-        render_message(msg)
+        render_pdf_message(msg)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -302,9 +307,11 @@ else:
 prompt = st.chat_input(placeholder, disabled=awaiting_pdf)
 
 if prompt and mode == CHAT_MODE:
+    session = st.session_state.chat_session
+
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(prompt)
-    st.session_state.history = add_message(st.session_state.history, "user", prompt)
+    session.add_user(prompt)
 
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         try:
@@ -320,7 +327,7 @@ if prompt and mode == CHAT_MODE:
                 response = st.write_stream(
                     guarded_stream(
                         stream_response(
-                            st.session_state.llm, st.session_state.history, config=config
+                            st.session_state.llm, session.messages, config=config
                         )
                     )
                 )
@@ -331,10 +338,7 @@ if prompt and mode == CHAT_MODE:
     # Only record an answer we actually got — a failed turn leaves the history
     # clean so the user can simply retry.
     if response:
-        st.session_state.history = add_message(
-            st.session_state.history, "assistant", response
-        )
-        st.session_state.export_snapshot = export_history(st.session_state.history)
+        session.add_assistant(response)
 
 elif prompt:
     with st.chat_message("user", avatar=USER_AVATAR):

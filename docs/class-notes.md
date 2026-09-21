@@ -72,3 +72,45 @@ is flattened into that dictionary at the moment it is stored and read back out
 of it when a citation is formatted. Keeping that translation in one function
 means the rest of the pipeline never handles a raw metadata key — the
 dictionary now exists only inside the library boundary that requires it.
+
+## Message and ChatSession (`documind/chat/`)
+
+A `Message` is one turn of a conversation — who spoke, what was said, and when.
+A `ChatSession` is the conversation itself: it keeps the messages in order, adds
+one at a time through `add_user` and `add_assistant`, forgets them all through
+`clear`, reports whether anything has been said yet through `is_empty`, and
+writes the plain-text transcript the sidebar's "Save chat" button downloads
+through `export`. The app builds exactly one of these at startup, stores it in
+Streamlit's session state, and every part of the chat tab — the bubbles on
+screen, the prompt sent to Ollama, the download button — reads from that one
+object.
+
+The list of messages is private, and `messages` hands back a tuple rather than
+the list. Those two details are the whole point. A tuple cannot be appended to,
+and because a fresh one is built on every read, a caller that does mutate what
+it was given is mutating its own copy: the conversation is unchanged. So the
+only way a message can enter a `ChatSession` is through one of the two methods
+that add one, and the only way one can leave is `clear`. The session can never
+be found in a state it did not put itself into.
+
+This is the thesis's *encapsulation* exhibit, and the contrast with what it
+replaced is exact. The old `chat_history.py` had no object at all: the
+conversation was a plain `list` of `{"role": ..., "content": ...}` dictionaries
+that `app.py` held and passed into every function. `add_message(history, role,
+content)` would accept *any* list — the wrong conversation, an empty one, a list
+of integers — and append to it without complaint. Every caller holding that list
+could append to it, reorder it, delete a message the user had already seen, or
+edit an answer after it was displayed, and nothing anywhere would raise. The
+data was public and the functions were merely conventions for touching it.
+Moving the list inside `ChatSession` turns those conventions into the only
+available operations.
+
+The tests state the claim rather than describe it:
+`test_mutating_what_messages_returned_does_not_change_the_session` copies the
+messages out, appends to the copy and clears it, then asserts the session still
+holds its two original messages, and
+`test_a_session_cannot_be_handed_an_existing_conversation` asserts the
+constructor takes nothing but a system prompt. The export format was carried
+over character for character from the old
+`export_history`, and is pinned by a test comparing against the exact expected
+string, so the user-facing download is provably unchanged by the refactor.
