@@ -53,8 +53,8 @@ module owns one step and can be tested in isolation.
 | `app.py` | Streamlit UI: mode selector, upload handling, chat loops, error rendering | every module below |
 | `pdf_handler.py` | PDF → per-page text → chunked `Document`s tagged with source and page | pdfplumber, LangChain splitter |
 | `vector_store.py` | Chunks → embeddings → FAISS index; similarity retrieval | langchain-ollama, FAISS |
-| `rag_chain.py` | Retrieved chunks → cited prompt → streamed answer | ollama |
-| `llm_chain.py` | The chat tab's text and vision paths | langchain-ollama, ollama, Pillow |
+| `rag_chain.py` | Retrieved chunks → cited prompt, handed to a provider to answer | `documind/llm/` |
+| `documind/llm/` | `LLMProvider` — what the app asks of a model; `OllamaProvider` — the chat, vision and document-answer calls to Ollama | langchain-ollama, ollama, Pillow |
 | `documind/chat/` | `ChatSession` — the conversation, the only object that can change it, and its text export | — |
 | `errors.py` | Failure translation and pre-flight readiness checks | ollama, httpx |
 | `config.py` | Tunable settings: models, prompts, UI labels | — |

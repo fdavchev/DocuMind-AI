@@ -7,7 +7,8 @@
 #   Retrieval  → fetch relevant chunks from FAISS  (vector_store.py)
 #   Augmented  → add those chunks to the prompt, each labelled with its
 #                source file and page number
-#   Generation → send the augmented prompt to the LLM and stream the answer
+#   Generation → hand the augmented prompt to an LLMProvider and stream the
+#                answer (documind/llm/)
 #
 # WHY NOT JUST ASK THE LLM DIRECTLY?
 # Because the LLM doesn't know what's in your PDF. It was trained on
@@ -22,10 +23,11 @@
 # those markers inline, and the UI lists the same passages underneath — so
 # any sentence in the answer can be traced back to a page.
 
-import ollama
 from langchain_core.documents import Document
 
 from documind.config import AppConfig
+from documind.llm.llm_provider import LLMProvider
+from documind.llm.ollama_provider import OllamaProvider
 
 
 def format_citation(doc: Document) -> str:
@@ -99,36 +101,34 @@ ANSWER:"""
     return prompt
 
 
-def stream_rag_answer(context: str, question: str, config: AppConfig = AppConfig()):
+def stream_rag_answer(
+    context: str,
+    question: str,
+    config: AppConfig = AppConfig(),
+    provider: LLMProvider | None = None,
+):
     """
     Builds the RAG prompt and streams the LLM's answer token by token.
 
-    This is a Python generator — it yields text pieces as they arrive
-    from Ollama, which lets Streamlit display them in real time with
-    st.write_stream().
+    The generation itself belongs to the provider — this function's job is the
+    prompt. The result is still a generator, which lets Streamlit display the
+    answer in real time with st.write_stream().
     """
     prompt = build_rag_prompt(context, question)
-
-    # Stream from Ollama using the low-level ollama library
-    # (same approach as your existing llm_chain.py)
-    stream = ollama.chat(
-        model=config.answer_model,
-        messages=[{"role": "user", "content": prompt}],
-        stream=True,
-    )
-
-    for chunk in stream:
-        token = chunk["message"]["content"]
-        if token:
-            yield token
+    return (provider or OllamaProvider(config)).stream_answer(prompt)
 
 
 def stream_rag_answer_from_documents(
-    docs: list[Document], question: str, config: AppConfig = AppConfig()
+    docs: list[Document],
+    question: str,
+    config: AppConfig = AppConfig(),
+    provider: LLMProvider | None = None,
 ):
     """
     Citation-aware entry point: retrieved Documents in, streamed answer out.
     The UI pairs this with format_sources_markdown(docs) so the [n] markers
     in the answer line up with the list below it.
     """
-    return stream_rag_answer(build_context_block(docs), question, config=config)
+    return stream_rag_answer(
+        build_context_block(docs), question, config=config, provider=provider
+    )

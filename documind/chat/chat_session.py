@@ -30,9 +30,9 @@ class ChatSession:
     def __init__(self, system_prompt: str | None = None):
         self._messages: list[Message] = []
 
-        # Held, but deliberately not used yet: the prompt is still assembled by
-        # llm_chain.py from the config. The provider class added in the next
-        # step is what will read it off the session.
+        # Held, but deliberately not used yet: OllamaProvider still reads the
+        # system prompt off the AppConfig it was given, so the session carries
+        # this only for a later step that lets one conversation override it.
         self._system_prompt = system_prompt
 
     @property

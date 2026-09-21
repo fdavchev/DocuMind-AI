@@ -98,13 +98,13 @@ DocuMind-AI/
 ├── ocr.py              # Optional Tesseract fallback for scanned pages
 ├── vector_store.py     # Embed chunks with nomic-embed-text, store & search FAISS
 ├── rag_chain.py        # Build the cited RAG prompt, stream answer from llama3
-├── llm_chain.py        # LangChain logic for the chat tab (text + vision)
 ├── errors.py           # Failure translation + pre-flight checks (no tracebacks in the UI)
 ├── config.py           # UI vocabulary only: mode names and avatars
 ├── documind/           # The object-oriented core, introduced class by class
 │   ├── config.py           # AppConfig — every tunable setting in one frozen object
 │   ├── documents/models.py # Document, ExtractedPage, Chunk — the document value objects
-│   └── chat/               # Message + ChatSession — the conversation and its export
+│   ├── chat/               # Message + ChatSession — the conversation and its export
+│   └── llm/                # LLMProvider + OllamaProvider — every call to the model
 ├── tests/              # pytest suite — runs offline, no Ollama required
 │   ├── conftest.py         # in-memory PDF builder + deterministic fake embeddings
 │   ├── test_pdf_handler.py # extraction, chunking, page metadata
@@ -114,6 +114,7 @@ DocuMind-AI/
 │   ├── test_errors.py      # failure paths: Ollama down, model missing, bad PDF
 │   ├── test_ocr.py         # scanned-page detection and the OCR fallback
 │   ├── test_chat_session.py# conversation state, export format, encapsulation
+│   ├── test_ollama_provider.py # the model calls, with Ollama faked
 │   └── test_app_smoke.py   # app.py actually starts, with and without Ollama
 ├── docs/architecture.md# Architecture chapter draft (components, pipeline, limitations)
 ├── DECISIONS.md        # Running log of design decisions and their rationale

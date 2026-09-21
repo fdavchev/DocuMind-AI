@@ -24,7 +24,7 @@ from config import (
 from documind.chat.chat_session import ChatSession
 from documind.chat.message import Message
 from documind.config import AppConfig
-from llm_chain import build_llm, stream_response, stream_vision_response
+from documind.llm.ollama_provider import OllamaProvider
 
 # Imports for the PDF Q&A mode (RAG with source citations)
 from pdf_handler import load_pdf_as_chunks, scanned_page_count
@@ -132,8 +132,8 @@ if "chat_session" not in st.session_state:
     st.session_state.chat_session = ChatSession(system_prompt=config.system_prompt)
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = config.default_model
-if "llm" not in st.session_state:
-    st.session_state.llm = build_llm(st.session_state.selected_model, config=config)
+if "provider" not in st.session_state:
+    st.session_state.provider = OllamaProvider(config, st.session_state.selected_model)
 if "pdf_vector_store" not in st.session_state:
     st.session_state.pdf_vector_store = None
 if "pdf_filenames" not in st.session_state:
@@ -161,7 +161,7 @@ with st.sidebar:
     )
     if chosen_model != st.session_state.selected_model:
         st.session_state.selected_model = chosen_model
-        st.session_state.llm = build_llm(chosen_model, config=config)
+        st.session_state.provider = OllamaProvider(config, chosen_model)
         st.toast(f"Switched to **{chosen_model}**", icon="🔄")
 
     st.markdown("**🖼️ Image input**")
@@ -315,21 +315,16 @@ if prompt and mode == CHAT_MODE:
 
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         try:
+            provider = st.session_state.provider
             if uploaded_image:
                 response = st.write_stream(
                     guarded_stream(
-                        stream_vision_response(
-                            uploaded_image.getvalue(), prompt, config=config
-                        )
+                        provider.stream_vision(uploaded_image.getvalue(), prompt)
                     )
                 )
             else:
                 response = st.write_stream(
-                    guarded_stream(
-                        stream_response(
-                            st.session_state.llm, session.messages, config=config
-                        )
-                    )
+                    guarded_stream(provider.stream_chat(session.messages))
                 )
         except Exception as exc:
             show_error(exc)
@@ -366,7 +361,12 @@ elif prompt:
             # Stream the answer, then show the passages it was given
             response = st.write_stream(
                 guarded_stream(
-                    stream_rag_answer_from_documents(docs, prompt, config=config)
+                    stream_rag_answer_from_documents(
+                        docs,
+                        prompt,
+                        config=config,
+                        provider=st.session_state.provider,
+                    )
                 )
             )
             with st.expander("📚 Sources"):

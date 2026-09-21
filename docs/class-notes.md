@@ -114,3 +114,36 @@ constructor takes nothing but a system prompt. The export format was carried
 over character for character from the old
 `export_history`, and is pinned by a test comparing against the exact expected
 string, so the user-facing download is provably unchanged by the refactor.
+
+## LLMProvider and OllamaProvider (`documind/llm/`)
+
+`LLMProvider` states the four things this application ever asks of a language
+model — say whether you can answer right now, continue a conversation, look at
+an image, and answer one already-written prompt — and says nothing about where
+that model lives. `OllamaProvider` is the one implementation: it talks to the
+local Ollama server, sending chat to whichever model the sidebar selected,
+images to llava because it is the only model here that can see one, and document
+answers to llama3. It replaces `llm_chain.py` entirely and absorbs the
+`ollama.chat` call `rag_chain.py` used to make itself, so every call to a model
+in the whole project now leaves from one file.
+
+Writing an abstract base class for a single implementation looks like ceremony
+until you try to test the thing. Ollama is a server that has to be running and a
+multi-gigabyte model that has to be pulled, and its answers are different every
+time — none of which belongs in a test suite. Because every caller is written
+against the four method names rather than against Ollama, a stand-in that
+returns canned tokens is accepted everywhere the real provider is: the new
+`tests/test_ollama_provider.py` pins all four paths — which model each one uses,
+the exact prompt and options sent, the JPEG conversion, the empty tokens
+skipped — in 18 tests, and the whole 137-test suite still runs with no Ollama
+process anywhere. The abstract methods are what make that promise enforceable:
+the last two tests in that file build a stand-in provider and then show that a
+subclass which forgets a method cannot be instantiated at all.
+
+This is the thesis's *abstraction and strategy pattern* exhibit. The strategy —
+how an answer is actually produced — sits behind a fixed interface, and choosing
+a different one is a constructor argument rather than a rewrite. Swapping Ollama
+for a hosted API or a different local runtime means writing one new class with
+those four methods and changing the single line in `app.py` that builds the
+provider; `rag_chain.py`, the chat loop and the image path would not change by a
+character, because none of them imports `ollama` any more.

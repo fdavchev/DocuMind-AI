@@ -3,8 +3,8 @@
 import pytest
 from langchain_core.documents import Document
 
-import rag_chain
 from documind.config import AppConfig
+from documind.llm import ollama_provider
 from rag_chain import (
     build_context_block,
     build_rag_prompt,
@@ -90,7 +90,7 @@ class FakeOllamaChat:
 @pytest.fixture
 def fake_chat(monkeypatch):
     fake = FakeOllamaChat(["The deadline ", "is March 1 ", "[1]."])
-    monkeypatch.setattr(rag_chain.ollama, "chat", fake)
+    monkeypatch.setattr(ollama_provider.ollama, "chat", fake)
     return fake
 
 
@@ -112,7 +112,7 @@ def test_stream_rag_answer_sends_the_built_prompt_to_ollama(fake_chat):
 
 def test_stream_rag_answer_skips_empty_tokens(monkeypatch):
     monkeypatch.setattr(
-        rag_chain.ollama, "chat", FakeOllamaChat(["Answer", "", " text"])
+        ollama_provider.ollama, "chat", FakeOllamaChat(["Answer", "", " text"])
     )
 
     assert list(stream_rag_answer("context", "question")) == ["Answer", " text"]

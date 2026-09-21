@@ -9,7 +9,7 @@ model pulled and no server running.
 import pytest
 from langchain_core.documents import Document
 
-import rag_chain
+from documind.llm import ollama_provider
 from pdf_handler import load_pdf_as_chunks
 from rag_chain import (
     format_sources_markdown,
@@ -30,7 +30,7 @@ class RecordingOllama:
 @pytest.fixture
 def recorded_ollama(monkeypatch):
     fake = RecordingOllama()
-    monkeypatch.setattr(rag_chain.ollama, "chat", fake)
+    monkeypatch.setattr(ollama_provider.ollama, "chat", fake)
     return fake
 
 
