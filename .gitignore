@@ -4,3 +4,4 @@ __pycache__/
 .streamlit/
 graphify-out/
 .pytest_cache/
+.vscode/
