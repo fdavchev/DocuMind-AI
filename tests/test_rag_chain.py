@@ -4,6 +4,7 @@ import pytest
 from langchain_core.documents import Document
 
 import rag_chain
+from documind.config import AppConfig
 from rag_chain import (
     build_context_block,
     build_rag_prompt,
@@ -103,7 +104,7 @@ def test_stream_rag_answer_sends_the_built_prompt_to_ollama(fake_chat):
     list(stream_rag_answer("[1] a.pdf, p. 1\ndeadline March 1", "When?"))
 
     call = fake_chat.calls[0]
-    assert call["model"] == rag_chain.ANSWER_MODEL
+    assert call["model"] == AppConfig().answer_model
     assert call["stream"] is True
     assert "[1] a.pdf, p. 1" in call["messages"][0]["content"]
     assert "When?" in call["messages"][0]["content"]

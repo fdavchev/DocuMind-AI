@@ -128,13 +128,13 @@ class OcrUnavailable(FriendlyError):
 class ScannedPdfTooLong(FriendlyError):
     """OCR would work, but the document is long enough that it isn't worth it."""
 
-    def __init__(self, filename: str, scanned_pages: int):
+    def __init__(self, filename: str, scanned_pages: int, limit: int):
         super().__init__(
             f"**{filename} needs OCR on {scanned_pages} pages**, over the "
-            f"{ocr.MAX_OCR_PAGES}-page limit. Reading that many scanned pages "
+            f"{limit}-page limit. Reading that many scanned pages "
             "would take several minutes.",
-            "Split it into smaller PDFs, or raise `MAX_OCR_PAGES` in `ocr.py` "
-            "if you're willing to wait.",
+            "Split it into smaller PDFs, or raise `max_ocr_pages` in "
+            "`documind/config.py` if you're willing to wait.",
         )
 
 

@@ -25,10 +25,7 @@
 import ollama
 from langchain_core.documents import Document
 
-# The text LLM used for answering. Must be pulled via `ollama pull llama3`.
-# We use llama3 here because llava is a vision model, not optimised for
-# long document reasoning.
-ANSWER_MODEL = "llama3"
+from documind.config import AppConfig
 
 
 def format_citation(doc: Document) -> str:
@@ -102,7 +99,7 @@ ANSWER:"""
     return prompt
 
 
-def stream_rag_answer(context: str, question: str):
+def stream_rag_answer(context: str, question: str, config: AppConfig = AppConfig()):
     """
     Builds the RAG prompt and streams the LLM's answer token by token.
 
@@ -115,7 +112,7 @@ def stream_rag_answer(context: str, question: str):
     # Stream from Ollama using the low-level ollama library
     # (same approach as your existing llm_chain.py)
     stream = ollama.chat(
-        model=ANSWER_MODEL,
+        model=config.answer_model,
         messages=[{"role": "user", "content": prompt}],
         stream=True,
     )
@@ -126,10 +123,12 @@ def stream_rag_answer(context: str, question: str):
             yield token
 
 
-def stream_rag_answer_from_documents(docs: list[Document], question: str):
+def stream_rag_answer_from_documents(
+    docs: list[Document], question: str, config: AppConfig = AppConfig()
+):
     """
     Citation-aware entry point: retrieved Documents in, streamed answer out.
     The UI pairs this with format_sources_markdown(docs) so the [n] markers
     in the answer line up with the list below it.
     """
-    return stream_rag_answer(build_context_block(docs), question)
+    return stream_rag_answer(build_context_block(docs), question, config=config)

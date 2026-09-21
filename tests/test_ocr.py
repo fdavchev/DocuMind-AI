@@ -11,6 +11,7 @@ OCR is refused rather than started.
 import pytest
 
 import ocr
+from documind.config import AppConfig
 from errors import (
     NoTextInPdf,
     OcrUnavailable,
@@ -154,23 +155,21 @@ def test_a_fully_scanned_pdf_yields_nothing_without_ocr(make_pdf):
     assert load_pdf_as_documents(pdf) == []
 
 
-def test_a_document_needing_too_much_ocr_is_refused(make_pdf, ocr_enabled, monkeypatch):
-    monkeypatch.setattr(ocr, "MAX_OCR_PAGES", 2)
+def test_a_document_needing_too_much_ocr_is_refused(make_pdf, ocr_enabled):
     pdf = make_pdf(["", "", ""], name="long_scan.pdf")
 
     with pytest.raises(ScannedPdfTooLong) as caught:
-        extract_pages_from_pdf(pdf)
+        extract_pages_from_pdf(pdf, config=AppConfig(max_ocr_pages=2))
 
     assert "long_scan.pdf" in caught.value.message
     assert caught.value.hint
 
 
-def test_the_page_limit_does_not_apply_when_ocr_is_off(make_pdf, monkeypatch):
+def test_the_page_limit_does_not_apply_when_ocr_is_off(make_pdf):
     # No OCR means no long OCR pass to refuse — the pages are simply skipped.
-    monkeypatch.setattr(ocr, "MAX_OCR_PAGES", 1)
     pdf = make_pdf(["", "", ""])
 
-    assert extract_pages_from_pdf(pdf) == []
+    assert extract_pages_from_pdf(pdf, config=AppConfig(max_ocr_pages=1)) == []
 
 
 # ── Choosing the right message ─────────────────────────────────────────────────

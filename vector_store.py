@@ -22,14 +22,12 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 
-# The embedding model — runs locally via Ollama.
-# It has NO LLM capability; it only converts text → vectors.
-EMBEDDING_MODEL = "nomic-embed-text"
+from documind.config import AppConfig
 
 
-def get_embeddings():
+def get_embeddings(config: AppConfig = AppConfig()):
     """The embedding function used for both indexing and querying."""
-    return OllamaEmbeddings(model=EMBEDDING_MODEL)
+    return OllamaEmbeddings(model=config.embedding_model)
 
 
 def _as_documents(chunks: list) -> list[Document]:
@@ -40,7 +38,9 @@ def _as_documents(chunks: list) -> list[Document]:
     ]
 
 
-def build_vector_store(chunks: list, embeddings=None) -> FAISS:
+def build_vector_store(
+    chunks: list, embeddings=None, config: AppConfig = AppConfig()
+) -> FAISS:
     """
     Embeds every chunk and stores them in a FAISS index, metadata included.
     Returns the FAISS vector store object.
@@ -52,7 +52,7 @@ def build_vector_store(chunks: list, embeddings=None) -> FAISS:
     `embeddings` is injectable so tests can run without a live Ollama.
     """
     if embeddings is None:
-        embeddings = get_embeddings()
+        embeddings = get_embeddings(config)
 
     # from_documents embeds each chunk and builds the index in one call,
     # carrying metadata through so citations survive retrieval.
@@ -71,24 +71,30 @@ def add_documents(vector_store: FAISS, chunks: list) -> FAISS:
 
 
 def retrieve_relevant_documents(
-    vector_store: FAISS, question: str, k: int = 4
+    vector_store: FAISS, question: str, k: int | None = None,
+    config: AppConfig = AppConfig()
 ) -> list[Document]:
     """
     Converts the user's question into a vector, then returns the k most
     similar chunks as Documents — page_content plus source/page metadata.
 
-    k=4 means we retrieve the 4 most relevant chunks.
+    k is how many chunks come back, falling back to the configured default.
     More chunks = more context but slower + more tokens.
     """
-    return vector_store.similarity_search(question, k=k)
+    return vector_store.similarity_search(
+        question, k=config.retrieval_k if k is None else k
+    )
 
 
-def retrieve_relevant_chunks(vector_store: FAISS, question: str, k: int = 4) -> str:
+def retrieve_relevant_chunks(
+    vector_store: FAISS, question: str, k: int | None = None,
+    config: AppConfig = AppConfig()
+) -> str:
     """
     Same retrieval, but flattened to one plain string with no citations.
     Kept for callers that just want raw context.
     """
-    docs = retrieve_relevant_documents(vector_store, question, k=k)
+    docs = retrieve_relevant_documents(vector_store, question, k=k, config=config)
     return "\n\n---\n\n".join(doc.page_content for doc in docs)
 
 

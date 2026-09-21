@@ -26,14 +26,12 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import ocr
+from documind.config import AppConfig
 from errors import ScannedPdfTooLong
-
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
 
 
 def extract_pages_from_pdf(
-    uploaded_file, use_ocr: bool = True
+    uploaded_file, use_ocr: bool = True, config: AppConfig = AppConfig()
 ) -> list[tuple[int, str]]:
     """
     Reads the PDF and returns [(page_number, page_text), ...].
@@ -55,9 +53,11 @@ def extract_pages_from_pdf(
 
         # Refuse up front rather than starting an OCR pass we know will take
         # minutes — the same principle as the upload size gate.
-        if ocr_wanted and len(ocr_pages) > ocr.MAX_OCR_PAGES:
+        if ocr_wanted and len(ocr_pages) > config.max_ocr_pages:
             raise ScannedPdfTooLong(
-                getattr(uploaded_file, "name", "The file"), len(ocr_pages)
+                getattr(uploaded_file, "name", "The file"),
+                len(ocr_pages),
+                config.max_ocr_pages,
             )
 
         for page_number, page in enumerate(pdf.pages, start=1):
@@ -83,36 +83,36 @@ def scanned_page_count(uploaded_file) -> int:
         return sum(1 for page in pdf.pages if ocr.page_needs_ocr(page.extract_text()))
 
 
-def extract_text_from_pdf(uploaded_file) -> str:
+def extract_text_from_pdf(uploaded_file, config: AppConfig = AppConfig()) -> str:
     """
     Reads every page of the PDF and returns one big string of text.
 
     Kept for the plain text path (and for callers that don't need citations);
     the citation pipeline uses extract_pages_from_pdf instead.
     """
-    pages = extract_pages_from_pdf(uploaded_file)
+    pages = extract_pages_from_pdf(uploaded_file, config=config)
     return "\n".join(text for _, text in pages)
 
 
-def _make_splitter() -> RecursiveCharacterTextSplitter:
+def _make_splitter(config: AppConfig) -> RecursiveCharacterTextSplitter:
     """
-    chunk_size=500   → each chunk is ~500 characters
-    chunk_overlap=50 → consecutive chunks share 50 characters at the border
+    chunk_size   → how many characters each chunk holds
+    chunk_overlap → how many characters consecutive chunks share at the border
     """
     return RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
+        chunk_size=config.chunk_size,
+        chunk_overlap=config.chunk_overlap,
         separators=["\n\n", "\n", ".", " "],  # try to split on natural boundaries
     )
 
 
-def split_text_into_chunks(text: str) -> list[str]:
+def split_text_into_chunks(text: str, config: AppConfig = AppConfig()) -> list[str]:
     """Splits a plain string into overlapping chunks (no metadata)."""
-    return _make_splitter().split_text(text)
+    return _make_splitter(config).split_text(text)
 
 
 def split_pages_into_chunks(
-    pages: list[tuple[int, str]], source: str
+    pages: list[tuple[int, str]], source: str, config: AppConfig = AppConfig()
 ) -> list[Document]:
     """
     Splits each page separately and returns LangChain Documents carrying
@@ -121,7 +121,7 @@ def split_pages_into_chunks(
     That metadata is what survives into FAISS and comes back at retrieval
     time, which is how an answer can say "p. 4 of report.pdf".
     """
-    splitter = _make_splitter()
+    splitter = _make_splitter(config)
     documents: list[Document] = []
 
     for page_number, page_text in pages:
@@ -139,7 +139,10 @@ def split_pages_into_chunks(
 
 
 def load_pdf_as_documents(
-    uploaded_file, source: str | None = None, use_ocr: bool = True
+    uploaded_file,
+    source: str | None = None,
+    use_ocr: bool = True,
+    config: AppConfig = AppConfig(),
 ) -> list[Document]:
     """
     One-call convenience: uploaded PDF → citation-ready Documents.
@@ -151,5 +154,5 @@ def load_pdf_as_documents(
     if source is None:
         source = getattr(uploaded_file, "name", "document.pdf")
 
-    pages = extract_pages_from_pdf(uploaded_file, use_ocr=use_ocr)
-    return split_pages_into_chunks(pages, source)
+    pages = extract_pages_from_pdf(uploaded_file, use_ocr=use_ocr, config=config)
+    return split_pages_into_chunks(pages, source, config=config)

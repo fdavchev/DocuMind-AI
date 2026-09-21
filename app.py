@@ -18,11 +18,10 @@ from datetime import datetime
 import streamlit as st
 
 from config import (
-    APP_TITLE, APP_ICON,
     USER_AVATAR, ASSISTANT_AVATAR,
-    AVAILABLE_MODELS, DEFAULT_MODEL,
     CHAT_MODE, PDF_MODE,
 )
+from documind.config import AppConfig
 from chat_history import init_memory, add_message, get_history, clear_history, export_history
 from llm_chain import build_llm, stream_response, stream_vision_response
 
@@ -47,6 +46,10 @@ from errors import (
 # One readiness check covering everything the app needs, so the user sees a
 # single verdict rather than one panel per mode.
 REQUIRED_MODELS = list(dict.fromkeys(CHAT_MODELS + PDF_MODELS))
+
+# Built once here and handed to every step of the pipeline, so no module has to
+# look up a global to find out how it should behave.
+config = AppConfig()
 
 
 def show_error(exc: Exception, filename: str | None = None) -> None:
@@ -93,7 +96,9 @@ def render_message(msg: dict) -> None:
 
 
 # ── Page config ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title=APP_TITLE, page_icon=APP_ICON, layout="centered")
+st.set_page_config(
+    page_title=config.app_title, page_icon=config.app_icon, layout="centered"
+)
 
 # Light styling only — spacing and emphasis. No hardcoded colours, so the app
 # still looks right in both Streamlit's light and dark themes.
@@ -112,15 +117,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title(f"{APP_ICON} {APP_TITLE}")
+st.title(f"{config.app_icon} {config.app_title}")
 
 # ── Session state ──────────────────────────────────────────────────────────────
 if "history" not in st.session_state:
     st.session_state.history = init_memory()
 if "selected_model" not in st.session_state:
-    st.session_state.selected_model = DEFAULT_MODEL
+    st.session_state.selected_model = config.default_model
 if "llm" not in st.session_state:
-    st.session_state.llm = build_llm(st.session_state.selected_model)
+    st.session_state.llm = build_llm(st.session_state.selected_model, config=config)
 if "export_snapshot" not in st.session_state:
     st.session_state.export_snapshot = ""
 if "pdf_vector_store" not in st.session_state:
@@ -143,14 +148,14 @@ with st.sidebar:
     st.markdown("**Chat model**")
     chosen_model = st.selectbox(
         label="Choose a model",
-        options=AVAILABLE_MODELS,
-        index=AVAILABLE_MODELS.index(st.session_state.selected_model),
+        options=config.available_models,
+        index=config.available_models.index(st.session_state.selected_model),
         label_visibility="collapsed",
         help="Used by Chat mode. PDF answers always use llama3.",
     )
     if chosen_model != st.session_state.selected_model:
         st.session_state.selected_model = chosen_model
-        st.session_state.llm = build_llm(chosen_model)
+        st.session_state.llm = build_llm(chosen_model, config=config)
         st.toast(f"Switched to **{chosen_model}**", icon="🔄")
 
     st.markdown("**🖼️ Image input**")
@@ -237,7 +242,7 @@ else:
 
                         # Step 1 + 2: extract per-page text and chunk it, keeping
                         # {"source": filename, "page": n} on every chunk
-                        documents = load_pdf_as_documents(pdf)
+                        documents = load_pdf_as_documents(pdf, config=config)
 
                         if not documents:
                             # Distinguish "scanned, and we can't OCR it" from
@@ -247,7 +252,9 @@ else:
                         # Step 3: embed the chunks — into a new index, or into the
                         # existing one so several PDFs are searchable together
                         if st.session_state.pdf_vector_store is None:
-                            st.session_state.pdf_vector_store = build_vector_store(documents)
+                            st.session_state.pdf_vector_store = build_vector_store(
+                                documents, config=config
+                            )
                         else:
                             add_documents(st.session_state.pdf_vector_store, documents)
 
@@ -305,14 +312,16 @@ if prompt and mode == CHAT_MODE:
                 response = st.write_stream(
                     guarded_stream(
                         stream_vision_response(
-                            uploaded_image.getvalue(), prompt, model_name="llava"
+                            uploaded_image.getvalue(), prompt, config=config
                         )
                     )
                 )
             else:
                 response = st.write_stream(
                     guarded_stream(
-                        stream_response(st.session_state.llm, st.session_state.history)
+                        stream_response(
+                            st.session_state.llm, st.session_state.history, config=config
+                        )
                     )
                 )
         except Exception as exc:
@@ -340,15 +349,21 @@ elif prompt:
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         response, sources_markdown = None, None
         try:
-            k = 4 if len(st.session_state.pdf_filenames) <= 1 else 6
+            k = (
+                config.retrieval_k
+                if len(st.session_state.pdf_filenames) <= 1
+                else config.retrieval_k_multi_document
+            )
             docs = retrieve_relevant_documents(
-                st.session_state.pdf_vector_store, prompt, k=k
+                st.session_state.pdf_vector_store, prompt, k=k, config=config
             )
             sources_markdown = format_sources_markdown(docs)
 
             # Stream the answer, then show the passages it was given
             response = st.write_stream(
-                guarded_stream(stream_rag_answer_from_documents(docs, prompt))
+                guarded_stream(
+                    stream_rag_answer_from_documents(docs, prompt, config=config)
+                )
             )
             with st.expander("📚 Sources"):
                 st.markdown(sources_markdown)

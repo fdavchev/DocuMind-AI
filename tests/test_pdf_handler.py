@@ -1,7 +1,7 @@
 """Extraction and chunking: does page provenance survive the pipeline?"""
 
+from documind.config import AppConfig
 from pdf_handler import (
-    CHUNK_SIZE,
     extract_pages_from_pdf,
     extract_text_from_pdf,
     load_pdf_as_documents,
@@ -49,7 +49,7 @@ def test_split_text_into_chunks_respects_chunk_size():
     chunks = split_text_into_chunks(text)
 
     assert len(chunks) > 1
-    assert all(len(chunk) <= CHUNK_SIZE for chunk in chunks)
+    assert all(len(chunk) <= AppConfig().chunk_size for chunk in chunks)
 
 
 def test_split_pages_tags_every_chunk_with_source_and_page():

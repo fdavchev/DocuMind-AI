@@ -276,17 +276,22 @@ pytest
 
 ## ⚙️ Configuration
 
-All settings live in `config.py`:
+All settings live in the `AppConfig` class in `documind/config.py`. `app.py` builds one
+`AppConfig()` at startup and passes it to every step of the pipeline:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `DEFAULT_MODEL` | `llava` | Model loaded on startup in the Chat tab |
-| `AVAILABLE_MODELS` | `[llama3, mistral, phi3, llava]` | Models shown in the sidebar dropdown |
-| `TEMPERATURE` | `0.7` | Creativity (0 = deterministic, 1 = creative) |
-| `MAX_TOKENS` | `512` | Max response length |
-| `SYSTEM_PROMPT` | See file | Personality/instruction prompt for the assistant |
-
-To change the PDF Q&A answer model or the embedding model, edit the constants at the top of `rag_chain.py` and `vector_store.py`.
+| `default_model` | `llava` | Model loaded on startup in Chat mode |
+| `available_models` | `(llama3, mistral, phi3, llava)` | Models shown in the sidebar dropdown |
+| `vision_model` | `llava` | Model used when an image is attached |
+| `answer_model` | `llama3` | Model that answers PDF questions |
+| `embedding_model` | `nomic-embed-text` | Model that turns chunks into vectors |
+| `chunk_size` / `chunk_overlap` | `500` / `50` | How PDF pages are split for indexing |
+| `retrieval_k` / `retrieval_k_multi_document` | `4` / `6` | Chunks retrieved per question |
+| `temperature` | `0.7` | Creativity (0 = deterministic, 1 = creative) |
+| `max_tokens` | `512` | Max response length |
+| `system_prompt` | See file | Personality/instruction prompt for the assistant |
+| `max_ocr_pages` | `50` | Scanned pages OCR will attempt before refusing the file |
 
 ---
 
