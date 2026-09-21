@@ -2,7 +2,8 @@
 
 from langchain_core.documents import Document
 
-from pdf_handler import load_pdf_as_documents
+from documind.documents.models import Chunk
+from pdf_handler import load_pdf_as_chunks
 from vector_store import (
     add_documents,
     build_vector_store,
@@ -29,6 +30,26 @@ def test_build_vector_store_indexes_every_chunk(fake_embeddings):
     )
 
     assert len(store.docstore._dict) == 2
+
+
+def test_build_vector_store_accepts_chunks(fake_embeddings):
+    # Chunks are what pdf_handler produces now; FAISS only understands
+    # page_content plus a metadata dict, so the conversion happens on the way in.
+    store = build_vector_store(
+        [
+            Chunk(
+                text="the budget forecast for the quarter",
+                page_number=2,
+                source_document="finance.pdf",
+            )
+        ],
+        embeddings=fake_embeddings,
+    )
+
+    hit = retrieve_relevant_documents(store, "budget forecast quarter", k=1)[0]
+
+    assert hit.page_content == "the budget forecast for the quarter"
+    assert hit.metadata == {"source": "finance.pdf", "page": 2}
 
 
 def test_build_vector_store_accepts_plain_strings(fake_embeddings):
@@ -117,7 +138,7 @@ def test_pdf_to_retrieval_keeps_the_page_number(make_pdf, fake_embeddings):
         name="handbook.pdf",
     )
 
-    store = build_vector_store(load_pdf_as_documents(pdf), embeddings=fake_embeddings)
+    store = build_vector_store(load_pdf_as_chunks(pdf), embeddings=fake_embeddings)
     hit = retrieve_relevant_documents(store, "deadline March first", k=1)[0]
 
     assert hit.metadata == {"source": "handbook.pdf", "page": 3}

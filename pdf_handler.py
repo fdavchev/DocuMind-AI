@@ -2,9 +2,11 @@
 #
 # WHAT THIS FILE DOES:
 # 1. Takes a PDF file uploaded by the user
-# 2. Extracts the text of every page, KEEPING the page number
-# 3. Splits that text into small overlapping "chunks", each one tagged
-#    with the file it came from and the page it was found on
+# 2. Extracts the text of every page as an ExtractedPage, KEEPING the page
+#    number and recording whether the page had to be read by OCR
+# 3. Bundles those pages into a Document — the file's name plus its pages
+# 4. Splits that document into small overlapping Chunks, each one carrying the
+#    file it came from and the page it was found on
 #
 # WHY CHUNKS?
 # A PDF might be 100 pages. We can't send all of it to the LLM at once
@@ -22,28 +24,29 @@
 # short chunks at page ends — cheap compared to a wrong citation.
 
 import pdfplumber
-from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import ocr
 from documind.config import AppConfig
+from documind.documents.models import Chunk, Document, ExtractedPage
 from errors import ScannedPdfTooLong
 
 
 def extract_pages_from_pdf(
     uploaded_file, use_ocr: bool = True, config: AppConfig = AppConfig()
-) -> list[tuple[int, str]]:
+) -> list[ExtractedPage]:
     """
-    Reads the PDF and returns [(page_number, page_text), ...].
+    Reads the PDF and returns one ExtractedPage per readable page.
 
     Page numbers are 1-based, matching what a human sees in a PDF reader.
     Pages with no usable text layer fall back to OCR when Tesseract is
-    available; pages that yield nothing either way are skipped.
+    available — those pages come back with used_ocr=True — and pages that yield
+    nothing either way are skipped.
     `uploaded_file` is the object Streamlit gives us from st.file_uploader.
 
     Set use_ocr=False to force the text-layer-only path.
     """
-    pages: list[tuple[int, str]] = []
+    pages: list[ExtractedPage] = []
 
     with pdfplumber.open(uploaded_file) as pdf:
         ocr_pages = [
@@ -62,12 +65,18 @@ def extract_pages_from_pdf(
 
         for page_number, page in enumerate(pdf.pages, start=1):
             page_text = page.extract_text()
+            used_ocr = False
 
             if ocr.page_needs_ocr(page_text) and ocr_wanted:
                 page_text = ocr.ocr_page(page)
+                used_ocr = True
 
             if page_text and page_text.strip():  # image-only pages return None
-                pages.append((page_number, page_text))
+                pages.append(
+                    ExtractedPage(
+                        number=page_number, text=page_text, used_ocr=used_ocr
+                    )
+                )
 
     return pages
 
@@ -83,15 +92,33 @@ def scanned_page_count(uploaded_file) -> int:
         return sum(1 for page in pdf.pages if ocr.page_needs_ocr(page.extract_text()))
 
 
+def load_pdf_as_document(
+    uploaded_file,
+    name: str | None = None,
+    use_ocr: bool = True,
+    config: AppConfig = AppConfig(),
+) -> Document:
+    """
+    Reads an uploaded PDF into a Document — its filename plus every page.
+
+    `name` defaults to the uploaded file's own name, which is what the UI shows
+    next to the page number in a citation.
+    """
+    if name is None:
+        name = getattr(uploaded_file, "name", "document.pdf")
+
+    pages = extract_pages_from_pdf(uploaded_file, use_ocr=use_ocr, config=config)
+    return Document(name=name, pages=tuple(pages))
+
+
 def extract_text_from_pdf(uploaded_file, config: AppConfig = AppConfig()) -> str:
     """
     Reads every page of the PDF and returns one big string of text.
 
     Kept for the plain text path (and for callers that don't need citations);
-    the citation pipeline uses extract_pages_from_pdf instead.
+    the citation pipeline uses load_pdf_as_chunks instead.
     """
-    pages = extract_pages_from_pdf(uploaded_file, config=config)
-    return "\n".join(text for _, text in pages)
+    return load_pdf_as_document(uploaded_file, config=config).text
 
 
 def _make_splitter(config: AppConfig) -> RecursiveCharacterTextSplitter:
@@ -107,52 +134,51 @@ def _make_splitter(config: AppConfig) -> RecursiveCharacterTextSplitter:
 
 
 def split_text_into_chunks(text: str, config: AppConfig = AppConfig()) -> list[str]:
-    """Splits a plain string into overlapping chunks (no metadata)."""
+    """Splits a plain string into overlapping chunks (no provenance)."""
     return _make_splitter(config).split_text(text)
 
 
-def split_pages_into_chunks(
-    pages: list[tuple[int, str]], source: str, config: AppConfig = AppConfig()
-) -> list[Document]:
+def split_document_into_chunks(
+    document: Document, config: AppConfig = AppConfig()
+) -> list[Chunk]:
     """
-    Splits each page separately and returns LangChain Documents carrying
-    metadata = {"source": <filename>, "page": <1-based page number>}.
+    Splits each page of a Document separately and returns Chunks carrying the
+    document's name and the page number the passage was found on.
 
-    That metadata is what survives into FAISS and comes back at retrieval
+    That provenance is what survives into FAISS and comes back at retrieval
     time, which is how an answer can say "p. 4 of report.pdf".
     """
     splitter = _make_splitter(config)
-    documents: list[Document] = []
+    chunks: list[Chunk] = []
 
-    for page_number, page_text in pages:
-        for chunk in splitter.split_text(page_text):
-            if not chunk.strip():
+    for page in document.pages:
+        for text in splitter.split_text(page.text):
+            if not text.strip():
                 continue
-            documents.append(
-                Document(
-                    page_content=chunk,
-                    metadata={"source": source, "page": page_number},
+            chunks.append(
+                Chunk(
+                    text=text,
+                    page_number=page.number,
+                    source_document=document.name,
                 )
             )
 
-    return documents
+    return chunks
 
 
-def load_pdf_as_documents(
+def load_pdf_as_chunks(
     uploaded_file,
-    source: str | None = None,
+    name: str | None = None,
     use_ocr: bool = True,
     config: AppConfig = AppConfig(),
-) -> list[Document]:
+) -> list[Chunk]:
     """
-    One-call convenience: uploaded PDF → citation-ready Documents.
+    One-call convenience: uploaded PDF → citation-ready Chunks.
 
-    `source` defaults to the uploaded file's name, which is what the UI
-    shows next to the page number. Returns [] when nothing could be read —
-    callers use no_text_error() to turn that into the right message.
+    Returns [] when nothing could be read — callers use no_text_error() to turn
+    that into the right message.
     """
-    if source is None:
-        source = getattr(uploaded_file, "name", "document.pdf")
-
-    pages = extract_pages_from_pdf(uploaded_file, use_ocr=use_ocr, config=config)
-    return split_pages_into_chunks(pages, source, config=config)
+    document = load_pdf_as_document(
+        uploaded_file, name=name, use_ocr=use_ocr, config=config
+    )
+    return split_document_into_chunks(document, config=config)

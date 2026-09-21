@@ -36,3 +36,39 @@ Building it also fixed a real bug. `TEMPERATURE`, `MAX_TOKENS` and
 editing them did nothing at all. They now reach Ollama for real — as the
 `temperature` and `num_predict` settings on the chat model, and as the system
 message in front of every image conversation.
+
+## Document, ExtractedPage and Chunk (`documind/documents/models.py`)
+
+These three frozen dataclasses are the things the document pipeline passes
+around. An `ExtractedPage` is one page after extraction — its 1-based number,
+its text, whether it had to be read by OCR, and a reserved slot for an OCR
+confidence score a later phase can fill in. A `Document` is a whole uploaded
+file: its name plus a tuple of those pages, with small read-only properties for
+the questions the app actually asks (`text`, `page_count`, `ocr_page_count`,
+`is_empty`). A `Chunk` is one passage small enough to embed, carrying the page
+number and the source filename it came from.
+
+They replace two shapes that carried the same information without naming it.
+Extraction used to return `(page_number, page_text)` tuples, where nothing tells
+a reader which element is which, and chunking used to return LangChain
+`Document` objects with `metadata={"source": ..., "page": ...}`, where a
+misspelled key fails silently at retrieval time instead of loudly where it was
+written. Named fields cannot be misread or misspelled without an error, and
+they can be extended — which is exactly why the OCR flag could be added to
+every page in this step without any caller noticing, when the tuple version had
+nowhere to put it.
+
+This is the thesis's *value objects* row: small immutable objects that describe
+data rather than do work. `Chunk` carries a page number so the app can answer
+"according to page 7" — a measurable, demoable thing the earliest version of
+this project threw away by concatenating a whole PDF into one string. That
+citation path is still intact: the end-to-end test indexes two PDFs, asks a
+question, and asserts the prompt and the Sources panel both say
+`[1] handbook.pdf, p. 3`.
+
+The one seam worth pointing at is `vector_store._as_documents`. FAISS only
+understands LangChain's `page_content` plus a metadata dictionary, so a `Chunk`
+is flattened into that dictionary at the moment it is stored and read back out
+of it when a citation is formatted. Keeping that translation in one function
+means the rest of the pipeline never handles a raw metadata key — the
+dictionary now exists only inside the library boundary that requires it.

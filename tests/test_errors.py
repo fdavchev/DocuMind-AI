@@ -11,6 +11,7 @@ import ollama
 import pytest
 
 import errors
+from documind.documents.models import ExtractedPage
 from errors import (
     MAX_PDF_MB,
     FriendlyError,
@@ -196,7 +197,9 @@ def test_validation_does_not_disturb_the_read_position(make_pdf):
     validate_pdf_upload(pdf)
 
     # The file must still be readable from the start afterwards.
-    assert extract_pages_from_pdf(pdf) == [(1, "page one text")]
+    assert extract_pages_from_pdf(pdf) == [
+        ExtractedPage(number=1, text="page one text", used_ocr=False)
+    ]
 
 
 def test_a_corrupt_file_raises_something_we_can_translate():

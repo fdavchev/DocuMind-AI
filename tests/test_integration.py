@@ -10,7 +10,7 @@ import pytest
 from langchain_core.documents import Document
 
 import rag_chain
-from pdf_handler import load_pdf_as_documents
+from pdf_handler import load_pdf_as_chunks
 from rag_chain import (
     format_sources_markdown,
     stream_rag_answer_from_documents,
@@ -50,8 +50,8 @@ def test_full_pipeline_cites_the_right_file_and_page(
     )
 
     # Index both PDFs into one store — the multi-document path.
-    store = build_vector_store(load_pdf_as_documents(handbook), embeddings=fake_embeddings)
-    add_documents(store, load_pdf_as_documents(finance))
+    store = build_vector_store(load_pdf_as_chunks(handbook), embeddings=fake_embeddings)
+    add_documents(store, load_pdf_as_chunks(finance))
 
     docs = retrieve_relevant_documents(store, "submission deadline March first", k=1)
     answer = "".join(stream_rag_answer_from_documents(docs, "When is the deadline?"))
@@ -74,8 +74,8 @@ def test_question_about_the_second_document_retrieves_from_it(
         ["intro", "the budget forecast for the quarter"], name="finance.pdf"
     )
 
-    store = build_vector_store(load_pdf_as_documents(handbook), embeddings=fake_embeddings)
-    add_documents(store, load_pdf_as_documents(finance))
+    store = build_vector_store(load_pdf_as_chunks(handbook), embeddings=fake_embeddings)
+    add_documents(store, load_pdf_as_chunks(finance))
 
     docs = retrieve_relevant_documents(store, "budget forecast quarter", k=1)
     list(stream_rag_answer_from_documents(docs, "What is the forecast?"))

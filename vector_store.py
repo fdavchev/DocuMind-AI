@@ -1,7 +1,7 @@
 # vector_store.py
 #
 # WHAT THIS FILE DOES:
-# 1. Takes the chunk Documents from pdf_handler.py
+# 1. Takes the Chunks from pdf_handler.py
 # 2. Converts each chunk into a "vector" (a list of ~768 numbers)
 #    using the nomic-embed-text model running locally in Ollama
 # 3. Stores those vectors in FAISS (a fast similarity search library)
@@ -23,6 +23,7 @@ from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 
 from documind.config import AppConfig
+from documind.documents.models import Chunk
 
 
 def get_embeddings(config: AppConfig = AppConfig()):
@@ -31,11 +32,27 @@ def get_embeddings(config: AppConfig = AppConfig()):
 
 
 def _as_documents(chunks: list) -> list[Document]:
-    """Accepts either Documents or bare strings and normalises to Documents."""
-    return [
-        chunk if isinstance(chunk, Document) else Document(page_content=chunk)
-        for chunk in chunks
-    ]
+    """
+    Normalises our Chunks, LangChain Documents or bare strings to Documents.
+
+    This is the one place where our own value objects become LangChain's
+    storage format. FAISS only understands page_content plus a metadata dict, so
+    a Chunk's typed fields are flattened into that dict here and read back out
+    of it at citation time — the conversion stays at this boundary rather than
+    leaking dictionary keys into the rest of the pipeline.
+    """
+    return [_as_document(chunk) for chunk in chunks]
+
+
+def _as_document(chunk) -> Document:
+    if isinstance(chunk, Chunk):
+        return Document(
+            page_content=chunk.text,
+            metadata={"source": chunk.source_document, "page": chunk.page_number},
+        )
+    if isinstance(chunk, Document):
+        return chunk
+    return Document(page_content=chunk)
 
 
 def build_vector_store(

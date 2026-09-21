@@ -26,7 +26,7 @@ from chat_history import init_memory, add_message, get_history, clear_history, e
 from llm_chain import build_llm, stream_response, stream_vision_response
 
 # Imports for the PDF Q&A mode (RAG with source citations)
-from pdf_handler import load_pdf_as_documents, scanned_page_count
+from pdf_handler import load_pdf_as_chunks, scanned_page_count
 from vector_store import build_vector_store, add_documents, retrieve_relevant_documents
 from rag_chain import stream_rag_answer_from_documents, format_sources_markdown
 
@@ -240,11 +240,11 @@ else:
                         # Step 0: refuse files too large to index in reasonable time
                         validate_pdf_upload(pdf)
 
-                        # Step 1 + 2: extract per-page text and chunk it, keeping
-                        # {"source": filename, "page": n} on every chunk
-                        documents = load_pdf_as_documents(pdf, config=config)
+                        # Step 1 + 2: extract per-page text and chunk it, so every
+                        # chunk still knows its source file and page number
+                        chunks = load_pdf_as_chunks(pdf, config=config)
 
-                        if not documents:
+                        if not chunks:
                             # Distinguish "scanned, and we can't OCR it" from
                             # "genuinely empty" — different problems, different fixes.
                             raise no_text_error(pdf.name, scanned_page_count(pdf))
@@ -253,10 +253,10 @@ else:
                         # existing one so several PDFs are searchable together
                         if st.session_state.pdf_vector_store is None:
                             st.session_state.pdf_vector_store = build_vector_store(
-                                documents, config=config
+                                chunks, config=config
                             )
                         else:
-                            add_documents(st.session_state.pdf_vector_store, documents)
+                            add_documents(st.session_state.pdf_vector_store, chunks)
 
                         st.session_state.pdf_filenames.append(pdf.name)
                 except Exception as exc:
@@ -264,7 +264,7 @@ else:
                     show_error(exc, pdf.name)
                     continue
 
-                st.success(f"✅ **{pdf.name}** indexed — {len(documents)} chunks created.")
+                st.success(f"✅ **{pdf.name}** indexed — {len(chunks)} chunks created.")
 
         if st.session_state.pdf_filenames:
             st.markdown(
