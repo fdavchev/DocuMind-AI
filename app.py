@@ -25,13 +25,15 @@ from rag_chain import stream_rag_answer_from_documents, format_sources_markdown
 # oversized or corrupt PDF)
 from errors import (
     CHAT_MODELS,
-    NoTextInPdf,
     PDF_MODELS,
     guarded_stream,
+    no_text_error,
+    ocr_status,
     readiness,
     translate,
     validate_pdf_upload,
 )
+from pdf_handler import scanned_page_count
 
 
 def show_error(exc: Exception, filename: str | None = None) -> None:
@@ -204,6 +206,7 @@ with tab_pdf:
         st.session_state.pdf_chat_history = []
 
     render_status_panel(PDF_MODELS, key="pdf")
+    st.caption(ocr_status())
 
     # ── PDF Upload (multiple documents share one index) ────────────────────────
     uploaded_pdfs = st.file_uploader(
@@ -230,7 +233,9 @@ with tab_pdf:
                     documents = load_pdf_as_documents(pdf)
 
                     if not documents:
-                        raise NoTextInPdf(pdf.name)
+                        # Distinguish "scanned, and we can't OCR it" from
+                        # "genuinely empty" — different problems, different fixes.
+                        raise no_text_error(pdf.name, scanned_page_count(pdf))
 
                     # Step 3: embed the chunks — into a new index, or into the
                     # existing one so several PDFs are searchable together

@@ -243,3 +243,55 @@ now uses `OllamaLLM` from `langchain-ollama`, which was already a dependency.
 `langchain-community`, which upstream has announced it is sunsetting. It works
 and there is no drop-in replacement package yet, so this is logged as known
 technical debt rather than fixed.
+
+---
+
+## 14 — OCR is a fallback, not a requirement
+*2026-08-27*
+
+Scanned PDFs are read with Tesseract when it is installed. When it isn't, the
+app says so — naming the install command for the user's platform — and
+text-based PDFs continue to work.
+
+**Alternative:** make Tesseract a hard dependency and fail without it.
+
+**Why this way:** Tesseract is a native binary, not a Python package. Requiring
+it turns `pip install -r requirements.txt` into a platform-specific system
+install and breaks the one-command Docker promise for anyone running locally.
+Scanned PDFs are also the minority case; making the common case depend on the
+uncommon one is the wrong trade. The Docker image installs Tesseract, so the
+containerised path supports scanned documents out of the box.
+
+**A detail that matters for accuracy:** the trigger is not "the page has no
+text" but "the page has fewer than 20 characters". Scanned pages are rarely
+completely empty — a stamped page number or a header artefact often survives
+extraction — and a page with nine characters on it has no usable text layer
+even though `extract_text()` returned something.
+
+**Three failure states, three messages.** "Scanned and Tesseract is missing",
+"scanned and OCR read nothing", and "genuinely empty" look identical to the
+caller but need different remedies: install Tesseract, re-scan at higher DPI, or
+check the file. `errors.no_text_error` picks between them.
+
+**Verified against a real scan (2026-08-27):** with Tesseract 5.4.0 installed,
+an image-only PDF — a rendered picture of text carrying no text layer at all —
+was run through the full pipeline. Both pages were read character-for-character
+correctly, and the recovered text kept its page number, so a citation from a
+scanned document is as accurate as one from a text document. Measured cost was
+roughly 0.55 s per page at 300 DPI. Without the binary the same file yielded
+nothing, which is the intended degradation rather than a failure.
+
+---
+
+## 15 — Tests force OCR off unless a test turns it on
+*2026-08-27*
+
+An autouse fixture in `conftest.py` patches `ocr.is_available` to return False
+for every test.
+
+**Why:** without it the suite behaves differently depending on whether the
+machine running it happens to have Tesseract installed — pages with a thin text
+layer would be OCR'd on one machine and skipped on another. A test suite whose
+results depend on undeclared host state is not evidence of anything. Tests that
+exercise OCR re-patch the function themselves, and because fixtures apply before
+the test body, theirs wins.

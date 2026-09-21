@@ -22,6 +22,8 @@ from langchain_core.embeddings import Embeddings
 # Make the project modules importable when pytest is run from anywhere.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import ocr  # noqa: E402 — must follow the sys.path fix above
+
 
 # ── A minimal PDF writer ───────────────────────────────────────────────────────
 
@@ -133,3 +135,18 @@ class FakeEmbeddings(Embeddings):
 @pytest.fixture
 def fake_embeddings():
     return FakeEmbeddings()
+
+
+# ── Machine-independent OCR ────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def ocr_disabled_by_default(monkeypatch):
+    """
+    Force OCR off for every test unless the test turns it back on.
+
+    Without this the suite would behave differently on a machine that happens to
+    have Tesseract installed: pages with a thin text layer would be OCR'd instead
+    of skipped. Tests that exercise OCR re-patch `is_available` themselves, and
+    because they do so after this fixture, theirs wins.
+    """
+    monkeypatch.setattr(ocr, "is_available", lambda: False)
