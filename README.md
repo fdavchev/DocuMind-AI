@@ -55,33 +55,38 @@ Chat History  ──►  Export to .txt
 ### 📄 PDF Q&A mode (RAG pipeline)
 
 ```
-PDF Upload (one or many)
+PDF Upload (one or many)        RagPipeline.ingest(file)
     │
     ▼
-Extract Text page by page      (pdfplumber)
+Extract Text page by page      (pdfplumber)      → LoaderFactory → PdfLoader
     │
     ▼
 Split each page into Chunks    (LangChain RecursiveCharacterTextSplitter)
     │                           each chunk tagged {source: file.pdf, page: n}
+    │                                             → TextSplitter
     ▼
 Embed Chunks                   (nomic-embed-text via Ollama)
-    │
+    │                                             → VectorStore
     ▼
 Store in FAISS                 (local vector database, all PDFs in one index)
     │
     ▼
-User asks a question
+User asks a question            RagPipeline.ask(question)
     │
     ▼
 Embed question  ──►  Search FAISS for similar chunks (across every loaded PDF)
-    │
+    │                                             → VectorStore.search
     ▼
 [Numbered passages + their file/page + Question]  ──►  llama3 (Ollama)
-    │
+    │                                             → OllamaProvider.stream_answer
     ▼
 Streamed answer with inline [n] citations  +  a Sources list showing
 "report.pdf, p. 4" for each passage the model was given
 ```
+
+`app.py` calls exactly two of those boxes — `ingest` and `ask`. Everything
+between them is the pipeline's own business, which is why the UI file names no
+PDF, vector or model library at all.
 
 **RAG** stands for **Retrieval Augmented Generation** — instead of asking the LLM to rely on its training data, we inject the relevant pages of *your* document into the prompt. The answer is always grounded in your actual file.
 
@@ -93,14 +98,11 @@ Streamed answer with inline [n] citations  +  a Sources list showing
 
 ```
 DocuMind-AI/
-├── app.py              # Streamlit UI — mode selector, sidebar, chat loops
-├── pdf_handler.py      # Thin wrappers over documind/documents/ (loading and chunking both moved)
+├── app.py              # Streamlit UI only — widgets plus calls on the objects below
 ├── ocr.py              # Optional Tesseract fallback for scanned pages
-├── vector_store.py     # Embed chunks with nomic-embed-text, store & search FAISS
-├── rag_chain.py        # Build the cited RAG prompt, stream answer from llama3
 ├── errors.py           # Failure translation + pre-flight checks (no tracebacks in the UI)
 ├── config.py           # UI vocabulary only: mode names and avatars
-├── documind/           # The object-oriented core, introduced class by class
+├── documind/           # The object-oriented core — the whole pipeline lives here
 │   ├── config.py           # AppConfig — every tunable setting in one frozen object
 │   ├── documents/          # Document value objects + DocumentLoader, PdfLoader, TextLoader, LoaderFactory, TextSplitter
 │   ├── chat/               # Message + ChatSession — the conversation and its export
@@ -108,19 +110,16 @@ DocuMind-AI/
 │   └── rag/                # VectorStore — chunks in, cited chunks out; RagPipeline — upload in, cited answer out
 ├── tests/              # pytest suite — runs offline, no Ollama required
 │   ├── conftest.py         # in-memory PDF builder + deterministic fake embeddings
-│   ├── test_pdf_handler.py # extraction, chunking, page metadata
-│   ├── test_vector_store.py# embedding, retrieval, multi-document indexing
-│   ├── test_rag_chain.py   # prompt construction and citation rendering
-│   ├── test_integration.py # PDF bytes → answer, with Ollama stubbed
-│   ├── test_errors.py      # failure paths: Ollama down, model missing, bad PDF
-│   ├── test_ocr.py         # scanned-page detection and the OCR fallback
-│   ├── test_chat_session.py# conversation state, export format, encapsulation
-│   ├── test_ollama_provider.py # the model calls, with Ollama faked
 │   ├── test_document_loader.py # the loaders: one load(), two file types
 │   ├── test_loader_factory.py # picking the loader for a filename
 │   ├── test_text_splitter.py # page-by-page chunking and the page-boundary rule
 │   ├── test_rag_vector_store.py # the VectorStore class: indexing and the Chunk round trip
 │   ├── test_rag_pipeline.py # the RagPipeline class: ingest, ask, citations, sources
+│   ├── test_integration.py # PDF bytes → answer through the real object graph, Ollama stubbed
+│   ├── test_errors.py      # failure paths: Ollama down, model missing, bad PDF
+│   ├── test_ocr.py         # scanned-page detection and the OCR fallback
+│   ├── test_chat_session.py# conversation state, export format, encapsulation
+│   ├── test_ollama_provider.py # the model calls, with Ollama faked
 │   └── test_app_smoke.py   # app.py actually starts, with and without Ollama
 ├── docs/architecture.md# Architecture chapter draft (components, pipeline, limitations)
 ├── DECISIONS.md        # Running log of design decisions and their rationale
@@ -246,14 +245,16 @@ translated into a message that names the problem *and* the fix:
 | A model isn't pulled | *"The model `llama3` isn't installed… `ollama pull llama3`"* |
 | PDF over 25 MB | *"…over the 25 MB limit"* — refused before parsing, so you aren't left watching a spinner |
 | Corrupt / password-protected file | *"…appears to be corrupt, password-protected, or not a PDF"* |
-| Scanned PDF, no Tesseract | *"…looks like a scanned document… and OCR isn't available"* — with the install command for your platform |
-| Scanned PDF, OCR read nothing | *"…the scan may be too low-resolution, skewed, or blank"* |
+| Nothing readable in the file (scanned with no Tesseract, OCR found nothing, or genuinely blank) | *"Nothing could be read from `scan.pdf` — every page came back empty"*, with the reminder that a scanned document needs OCR to be available |
 | Scanned PDF over 50 pages | *"…over the 50-page limit"* — refused rather than starting a ten-minute OCR pass |
+| A file type no loader handles | *"…isn't a file type this app can read"*, naming the formats that would have worked |
+| A question asked before anything is indexed | *"There is nothing to search yet"* — the input is disabled until a document is indexed, so this is the belt to that braces |
 
 Both tabs show a **System check** panel that verifies Ollama is reachable and
 the required models are installed *before* you upload anything, with a re-check
-button for once you've fixed it. In a batch upload, one bad file is skipped with
-its own message while the rest still index.
+button for once you've fixed it. The same panel reports whether OCR is available
+and prints the install command for your platform when it isn't. In a batch
+upload, one bad file is skipped with its own message while the rest still index.
 
 The translation lives in `errors.py` and is unit-tested, so the UI carries no
 knowledge of what an `httpx.ConnectError` means.
@@ -275,15 +276,14 @@ pytest
 
 | File | Covers |
 |------|--------|
-| `test_pdf_handler.py` | Page-accurate extraction, chunking, empty/scanned-page handling |
-| `test_document_loader.py` | The loader contract: one `load()` shared by `PdfLoader` and `TextLoader` |
+| `test_document_loader.py` | The loader contract: one `load()` shared by `PdfLoader` and `TextLoader`, page-accurate extraction |
 | `test_loader_factory.py` | Dispatch by extension, unsupported-file refusal, registering a new loader |
 | `test_text_splitter.py` | Page-by-page chunking, configured chunk size, no chunk across a page boundary |
-| `test_vector_store.py` | FAISS indexing, metadata survival, multi-document retrieval |
 | `test_rag_vector_store.py` | The `VectorStore` class: `Chunk` → FAISS → `Chunk`, retrieval width, indexed sources |
 | `test_rag_pipeline.py` | The `RagPipeline` class: ingest reports, retrieval → prompt → streamed answer, cited sources |
-| `test_rag_chain.py` | Citation formatting, prompt rules, streaming from a stubbed Ollama |
-| `test_integration.py` | Full pipeline: PDF bytes → chunks → FAISS → prompt → answer |
+| `test_chat_session.py` | Conversation state, export format, encapsulation of the message list |
+| `test_ollama_provider.py` | Every model call: chat, vision and document answers, with Ollama faked |
+| `test_integration.py` | Full pipeline through the real object graph: PDF bytes → chunks → FAISS → prompt → answer |
 | `test_errors.py` | Failure translation, pre-flight checks, upload validation |
 | `test_ocr.py` | Scanned-page detection, OCR fallback, graceful degradation without Tesseract |
 | `test_app_smoke.py` | Runs `app.py` through Streamlit's script runner — catches broken imports and startup crashes |

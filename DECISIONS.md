@@ -13,8 +13,10 @@ reasoning is stated as it holds today rather than as it was recorded at the time
 ## 1 — Chunks are split page by page, never across a page boundary
 *2026-08-27*
 
-`pdf_handler.py` extracts each page separately and runs the text splitter once
-per page, rather than concatenating the whole PDF and splitting the result.
+`PdfLoader` extracts each page separately and `TextSplitter` runs the splitter
+once per page, rather than concatenating the whole PDF and splitting the result.
+(Both were `pdf_handler.py` until the OOP refactor moved them into
+`documind/documents/`; the behaviour is unchanged.)
 
 **Alternative:** split one continuous string, which is the more common tutorial
 approach and produces slightly fewer, more evenly sized chunks.
@@ -31,7 +33,7 @@ ends — cheap next to a citation that points at the wrong page. A test
 ## 2 — One shared FAISS index for all documents, not one index per file
 *2026-08-27*
 
-Uploading a second PDF calls `add_documents` on the existing store instead of
+Uploading a second PDF calls `VectorStore.add` on the existing store instead of
 building a separate index per file and merging results at query time.
 
 **Alternative:** an index per document, then query each and merge the top hits.
@@ -63,9 +65,11 @@ interleave — was rejected as premature for a corpus of a few PDFs.
 ## 4 — The embedding model is injectable, and the LLM call is stubbed in tests
 *2026-08-27*
 
-`build_vector_store(chunks, embeddings=None)` defaults to `OllamaEmbeddings` but
+`VectorStore(config, embeddings=None)` defaults to `OllamaEmbeddings` but
 accepts any `Embeddings` implementation; the tests pass a deterministic
-bag-of-words fake. Ollama's `chat` is monkeypatched in the integration tests.
+bag-of-words fake. Ollama's `chat` is monkeypatched in the integration tests, and
+`RagPipeline` takes its model as an `LLMProvider`, so a test can hand it a fake
+implementation instead.
 
 **Alternative:** integration tests that require a live Ollama with `llama3` and
 `nomic-embed-text` pulled.
@@ -229,8 +233,9 @@ reasoned through, but `docker compose up` remains untested.
 runner and asserts it starts with no exception — both with Ollama reachable and
 with it refused.
 
-**Why:** unit tests over `pdf_handler`, `vector_store` and `rag_chain` can all
-pass while the app itself fails to start, because nothing in them imports
+**Why:** unit tests over the loaders, the splitter, the vector store and the
+pipeline can all pass while the app itself fails to start, because nothing in
+them imports
 `app.py`. That is exactly the failure that ruins a live demo, and it is the one
 class of bug that only an end-to-end boot catches.
 
@@ -239,7 +244,7 @@ building its LLM with `langchain_community.llms.Ollama`, a class deprecated and
 scheduled for removal, which printed a deprecation warning on every start. It
 now uses `OllamaLLM` from `langchain-ollama`, which was already a dependency.
 
-**Still outstanding:** `vector_store.py` imports FAISS from
+**Still outstanding:** `documind/rag/vector_store.py` imports FAISS from
 `langchain-community`, which upstream has announced it is sunsetting. It works
 and there is no drop-in replacement package yet, so this is logged as known
 technical debt rather than fixed.

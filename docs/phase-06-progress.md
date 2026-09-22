@@ -67,8 +67,8 @@ commit, each verified against the full pytest suite and a live
 | 6 | `LoaderFactory` | ✅ committed `b2f93d0c` (⚠️ commit message says "DocumentLoader/PdfLoader/TextLoader" — item 5's message got reused by mistake; content is correct, message is wrong) | `Add LoaderFactory, dispatching uploads to PdfLoader or TextLoader by extension` | 190 |
 | 7 | `TextSplitter` | ✅ committed `ad119feb` | `Add TextSplitter, moving page-by-page chunking out of pdf_handler.py` | 206 |
 | 8 | `VectorStore` | ✅ committed `c71a838b` | `Add VectorStore, wrapping FAISS behind a Chunk-in, Chunk-out interface` | 226 |
-| 9 | `RagPipeline` | ✅ built, awaiting commit | `Add RagPipeline, orchestrating loading, chunking, retrieval and cited answers` | 264 |
-| 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py` | ⬜ not started | — | — |
+| 9 | `RagPipeline` | ✅ committed `b3463bee` | `Add RagPipeline, orchestrating loading, chunking, retrieval and cited answers` | 264 |
+| 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py`/`vector_store.py` | ✅ built, awaiting commit | `Strip app.py to UI only, deleting pdf_handler.py, vector_store.py and rag_chain.py` | 227 (see item 10 record for the accounting) |
 
 ---
 
@@ -263,9 +263,7 @@ class VectorStore:
 
 ---
 
-## Full spec for remaining items
-
-### Item 9 — `RagPipeline` (built + verified, **not yet committed**)
+### Item 9 — `RagPipeline` (committed `b3463bee`)
 
 **Built:** `documind/rag/rag_pipeline.py`:
 ```python
@@ -306,28 +304,55 @@ class RagPipeline:
 
 **Tests:** 264 passing (226 + 38 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
 
-**⚠️ Not committed yet — run `git status` to confirm current state before starting item 10.**
-
 ---
 
-## Full spec for remaining items
+### Item 10 — Strip `app.py` to UI-only (built, awaiting commit)
 
-### Item 10 — Strip `app.py` to UI-only
+**`app.py` rewritten.** Six objects are built once at startup: `config = AppConfig()` at module level, then in session state `provider = OllamaProvider(config, selected_model)`, `vector_store = VectorStore(config)` and `pipeline = build_pipeline(vector_store, provider)` — a module-level helper that composes `RagPipeline(LoaderFactory(config), TextSplitter(config), vector_store, provider)`. Everything below is a Streamlit call or a method call on one of those.
 
-Build `AppConfig`, `LoaderFactory`, `TextSplitter`, `VectorStore`, `OllamaProvider`, `RagPipeline` once at startup in `app.py`; the rest of `app.py` should only call methods on these objects plus Streamlit widget code. **Self-check:** `grep -nE "pdfplumber|ollama|faiss|langchain" app.py` must return nothing. Delete `rag_chain.py` and the old top-level `pdf_handler.py`/`vector_store.py` once `RagPipeline`/`VectorStore`/`PdfLoader` fully cover them (grep-confirm no other importers first).
+- **Upload flow:** `validate_pdf_upload(pdf)` (size gate, unchanged) → `report = st.session_state.pipeline.ingest(pdf)`. The success message now reports all of `IngestReport`: `✅ **name** indexed — N page(s), M chunks in T.Ts.` plus ` K page(s) needed OCR.` when `report.used_ocr`. The `if store is None: build else add` branch and the `no_text_error` branch are gone.
+- **Question flow:** `answer = pipeline.ask(prompt)` → `sources_markdown = pipeline.format_sources_markdown()` (defaults to `last_sources`) → `st.write_stream(guarded_stream(answer))` → Sources expander. Retrieval failures surface before the bubble streams, as item 9 designed.
+- **`st.session_state.pdf_filenames` deleted** — `vector_store.sources` answers "which files are indexed" for the expander label, the dedupe check and the "Answering from:" line. Sorted rather than upload-ordered now (deterministic; no test pinned the order).
+- **`awaiting_pdf`** reads `not st.session_state.vector_store.is_ready` instead of a `None` check.
+- **Model switch** rebuilds the provider *and* the pipeline around the same `VectorStore`, so the chat and the pipeline never hold two providers that disagree. **Clear documents** installs a fresh `VectorStore` plus a fresh pipeline.
+- Chat and vision paths were already on `st.session_state.provider` from item 4 — unchanged.
+
+**Package `__init__.py` exports added** (`documind/chat`, `documind/documents`, `documind/llm`, `documind/rag`), all four previously empty. Two reasons: the mandated self-check `grep -nE "pdfplumber|ollama|faiss|langchain" app.py` matched `from documind.llm.ollama_provider import ...` (our own module, but the grep is case-sensitive and literal), and a package-level public API reads better in the UI file. `app.py` now imports `from documind.llm import OllamaProvider`, `from documind.rag import RagPipeline, VectorStore`, etc. Tests still import module paths, unchanged.
+
+**`EmptyDocumentError` decision point (flagged by item 9): accepted the coarser message.** No test anywhere pins the finer app-level distinction — `tests/test_errors.py` and `tests/test_ocr.py` test `no_text_error`/`OcrUnavailable` directly as `errors.py` unit tests, and no `app.py`-level test uploads a blank file. So `app.py` no longer calls `no_text_error`/`scanned_page_count`; a blank or unreadable-scan upload now renders `EmptyDocumentError`, whose hint already names OCR, and the sidebar System-check panel still prints the platform install command via `ocr_status()`. Recovering the finer message would have meant asking a loader what kind of file it just read — the exact question `DocumentLoader` exists to stop callers asking. **Consequence to note:** `errors.no_text_error`, `OcrUnavailable` and `NoTextInPdf` now have no production call site (still exported, still unit-tested). If Filip wants the granularity back, the right home is inside `PdfLoader` raising a richer `EmptyDocumentError` — a future-phase decision, not this item's.
+
+**Files deleted (grep-confirmed no importers first, across `app.py`, `tests/`, `documind/`):** `pdf_handler.py`, `vector_store.py` (top-level), `rag_chain.py`, `tests/test_pdf_handler.py` (18), `tests/test_vector_store.py` (10), `tests/test_rag_chain.py` (11).
+
+**Test accounting: 264 → 227 (all green).** −39 from the three superseded test files, +2 ported. Every assertion checked for an equivalent before deleting:
+- `test_pdf_handler.py` → covered by `test_document_loader.py` + `test_text_splitter.py`, except two with no equivalent, which were **ported into `test_document_loader.py`**: `test_document_text_joins_every_page` and `test_ocr_page_count_counts_only_pages_read_by_ocr` (the only remaining pure `Document` value-object tests — item 2 had put them in `test_pdf_handler.py`).
+- `test_vector_store.py` → covered by `test_rag_vector_store.py`, except `test_build_vector_store_accepts_plain_strings` and `test_retrieve_relevant_chunks_returns_joined_text`, which tested capabilities of the deleted module (`VectorStore` takes `Chunk`s only, and `retrieve_relevant_chunks` had no caller). Deleted with the code they covered.
+- `test_rag_chain.py` → citation/prompt tests are all in `test_rag_pipeline.py` (ported at item 9); its three `stream_rag_answer` tests are covered by `test_ollama_provider.py`'s `stream_answer` tests (answer model, prompt passed through, empty tokens skipped).
+
+**Tests rewired rather than deleted:** `tests/test_integration.py` (3 tests) now builds the same object graph `app.py` does — real `LoaderFactory`/`TextSplitter`/`VectorStore`/**real `OllamaProvider`** behind a `RagPipeline`, with `ollama.chat` monkeypatched — which keeps the "the prompt Ollama would really receive" assertions that `test_rag_pipeline.py`'s `FakeProvider` cannot make. `tests/test_errors.py` and `tests/test_ocr.py` swapped their `pdf_handler` imports for `PdfLoader`/`TextSplitter` (two of them now assert `pytest.raises(EmptyDocumentError)` where the old wrapper returned `[]`). `tests/test_rag_vector_store.py` builds its chunks with `PdfLoader` + `TextSplitter` instead of `load_pdf_as_chunks`.
+
+**Verification checklist (run, actual results):**
+- `grep -nE "pdfplumber|ollama|faiss|langchain" app.py` → **no matches** (exit 1). The header comment was reworded off the literal word `pdfplumber` to keep this honest.
+- `grep -rn "^class " documind/ | wc -l` → **16**.
+- `grep -rnE "ABC|abstractmethod" documind/` → **2 ABCs** (`DocumentLoader`, `LLMProvider`), 5 `@abstractmethod`s.
+- `pytest` → **227 passed**.
+- `streamlit run app.py --server.headless true --server.port 8599` → `/_stcore/health` → **200 ok**, clean stderr.
+
+**Docs updated:** `README.md` (project tree, test-coverage table, RAG diagram annotated with the class per step, failure table rewritten for the coarser empty-document message), `docs/architecture.md` (§1 diagram, §2 component table rewritten around the classes, §3.1 ingestion diagram + metadata paragraph, §5 test counts/layers/`FakeProvider`), `docs/class-notes.md` (closing section: what `app.py` is left with, the three habits that disappeared, the OCR-message cost, why the old files were deleted), `DECISIONS.md` (#1, #2, #4, #13 named deleted modules/functions — symbol names corrected, decisions themselves untouched).
 
 ---
 
 ## Verification checklist for the end of the whole phase
 
 ```
-grep -nE "pdfplumber|ollama|faiss|langchain" app.py     → must return NOTHING
-grep -rn "^class " documind/ | wc -l                    → 10+ classes/groups
-grep -rn "ABC|abstractmethod" documind/                 → at least 2 ABCs
-streamlit run app.py                                    → app starts
-pytest -v                                                → all green
+grep -nE "pdfplumber|ollama|faiss|langchain" app.py     → ✅ no matches (exit 1)
+grep -rn "^class " documind/ | wc -l                    → ✅ 16
+grep -rn "ABC|abstractmethod" documind/                 → ✅ 2 ABCs, 5 abstract methods
+streamlit run app.py                                    → ✅ boots, /_stcore/health → 200
+pytest                                                   → ✅ 227 passed
 ```
-Plus manually confirm: chat tab streams, PDF tab answers with citations, model switching works, export works, and `chat_history.py` (✅ deleted), `llm_chain.py` (✅ deleted), `pdf_handler.py`, `rag_chain.py`, and the old top-level `vector_store.py` are all deleted by the end.
+Plus manually confirm: chat tab streams, PDF tab answers with citations, model switching works, export works, and `chat_history.py` (✅ deleted), `llm_chain.py` (✅ deleted), `pdf_handler.py` (✅ deleted), `rag_chain.py` (✅ deleted), and the old top-level `vector_store.py` (✅ deleted) are all gone by the end.
+
+The four UI paths were confirmed by reading the code and the tests rather than by clicking (no live Ollama on this machine): chat streams through `provider.stream_chat(session.messages)` under `st.write_stream`/`guarded_stream` and vision through `provider.stream_vision(...)` (both pinned by `tests/test_ollama_provider.py`); PDF answers stream through `pipeline.ask()` with `pipeline.format_sources_markdown()` under a `📚 Sources` expander (pinned end to end by `tests/test_integration.py` and `tests/test_rag_pipeline.py`); model switching rebuilds the provider and the pipeline on the sidebar's `chosen_model != selected_model` branch; export calls `chat_session.export()` in the download button (pinned by `tests/test_chat_session.py`). `tests/test_app_smoke.py` boots the real script for both Ollama-up and Ollama-down.
 
 ## Explicitly out of scope for this phase
 

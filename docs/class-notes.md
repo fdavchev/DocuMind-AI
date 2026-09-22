@@ -342,3 +342,46 @@ store raises when it is searched before anything is indexed, and `ask` checks
 the existing error handler renders it as a sentence the user can act on rather
 than as a `RuntimeError`. Answering from an empty context was never an option:
 the model would produce a confident answer with no document behind it.
+
+## What `app.py` is left with (the end of the refactor)
+
+The last step of the phase introduced no new class — it removed the reason the
+old ones existed. `app.py` now builds the object graph once at startup — an
+`AppConfig`, a `LoaderFactory`, a `TextSplitter`, a `VectorStore`, an
+`OllamaProvider` and the `RagPipeline` composed from them — and every line after
+that is either a Streamlit widget or a method call on one of those objects.
+Uploading a file is `pipeline.ingest(pdf)` and the `IngestReport` it returns is
+what the success message prints; asking a question is `pipeline.ask(prompt)`
+followed by `pipeline.format_sources_markdown()`. The check that this is really
+true is a grep: `pdfplumber`, `ollama`, `faiss` and `langchain` appear nowhere in
+the file.
+
+Three habits of the old UI disappeared with it, and they are the ones worth
+naming at a defence. It kept a parallel list of indexed filenames beside the
+index itself — the `VectorStore` answers that now, from what it actually holds.
+It chose how many passages to retrieve, with `k = 4 if one file else 6` written
+in the middle of a chat handler — that rule lives in the store, which knows how
+many documents it has. And it branched on whether an upload was the first one, to
+decide between building an index and adding to it — `add` handles both, so the
+branch is gone. None of those were UI decisions; they were pipeline decisions
+that had nowhere else to live.
+
+One honest cost is recorded here rather than hidden: the old handler could tell
+"this PDF is scanned and OCR isn't installed" apart from "this PDF is genuinely
+blank", because it called `scanned_page_count` itself after getting an empty
+result. `RagPipeline.ingest` raises a single `EmptyDocumentError` for both, whose
+hint names OCR as the likely cause, and the sidebar's System check panel says
+whether OCR is available on this machine with the install command for the
+platform. The finer distinction was given up on purpose: recovering it in the UI
+would mean asking a loader what kind of file it had just read, which is exactly
+the question the `DocumentLoader` abstraction exists to stop callers asking. It
+belongs, if it comes back, inside `PdfLoader` — the one object that knows the
+answer.
+
+Four files were deleted in this step — `pdf_handler.py`, `vector_store.py`,
+`rag_chain.py` and their old tests — after a grep confirmed nothing imported
+them; `chat_history.py` and `llm_chain.py` went earlier in the phase, the same
+way. Deleting them is part of the exhibit rather than tidying afterwards: two
+implementations of the same pipeline living side by side is how a codebase ends
+up defending dead code, and every assertion those old test files made is still
+made somewhere — against the class that took the work over.

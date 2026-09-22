@@ -216,6 +216,29 @@ def test_both_loaders_refuse_the_other_ones_file_type(make_pdf, make_txt):
         TextLoader(AppConfig()).load(make_pdf(["text"], name="report.pdf"))
 
 
+# ── The Document that comes back ───────────────────────────────────────────────
+
+def test_document_text_joins_every_page(make_pdf):
+    document = PdfLoader(AppConfig()).load(make_pdf(["Alpha content", "Beta content"]))
+
+    assert "Alpha content" in document.text
+    assert "Beta content" in document.text
+
+
+def test_ocr_page_count_counts_only_pages_read_by_ocr():
+    document = Document(
+        name="scan.pdf",
+        pages=(
+            ExtractedPage(number=1, text="text layer", used_ocr=False),
+            ExtractedPage(number=2, text="recovered", used_ocr=True),
+            ExtractedPage(number=3, text="recovered", used_ocr=True),
+        ),
+    )
+
+    assert document.page_count == 3
+    assert document.ocr_page_count == 2
+
+
 # ── PdfLoader: the one step it does differently ────────────────────────────────
 
 def test_pdf_pages_keep_one_based_page_numbers(make_pdf):

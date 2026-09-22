@@ -1,18 +1,18 @@
 """
 The VectorStore class: indexing, retrieval, and the Chunk round trip.
 
-These sit alongside `test_vector_store.py`, which still covers the module-level
-functions the app has not been rewired off yet. What is new here is the promise
-that nothing outside this class ever handles a LangChain Document: Chunks go in
-and Chunks come back, with their page and filename intact.
+The promise these pin is that nothing outside this class ever handles a
+LangChain Document: Chunks go in and Chunks come back, with their page and
+filename intact.
 """
 
 import pytest
 
 from documind.config import AppConfig
 from documind.documents.models import Chunk
+from documind.documents.pdf_loader import PdfLoader
+from documind.documents.text_splitter import TextSplitter
 from documind.rag.vector_store import VectorStore
-from pdf_handler import load_pdf_as_chunks
 
 
 def _chunks(*triples) -> list[Chunk]:
@@ -182,9 +182,10 @@ def test_a_real_pdf_survives_indexing_and_retrieval(make_pdf, fake_embeddings):
         ["intro boilerplate", "unrelated filler", "the deadline is March first"],
         name="handbook.pdf",
     )
-    store = VectorStore(AppConfig(), embeddings=fake_embeddings)
+    config = AppConfig()
+    store = VectorStore(config, embeddings=fake_embeddings)
 
-    store.build(load_pdf_as_chunks(pdf))
+    store.build(TextSplitter(config).split(PdfLoader(config).load(pdf)))
     hit = store.search("deadline March first", k=1)[0]
 
     assert hit.source_document == "handbook.pdf"
