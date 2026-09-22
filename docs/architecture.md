@@ -51,7 +51,8 @@ module owns one step and can be tested in isolation.
 | Module | Responsibility | Depends on |
 |---|---|---|
 | `app.py` | Streamlit UI: mode selector, upload handling, chat loops, error rendering | every module below |
-| `pdf_handler.py` | PDF → per-page text → chunked `Document`s tagged with source and page | pdfplumber, LangChain splitter |
+| `pdf_handler.py` | `Document` → `Chunk`s tagged with source and page | LangChain splitter, `documind/documents/` |
+| `documind/documents/` | `DocumentLoader` — the one way a file becomes a `Document`; `PdfLoader` (per-page text, OCR fallback) and `TextLoader` (`.txt`/`.md`) implement it | pdfplumber, `ocr.py` |
 | `vector_store.py` | Chunks → embeddings → FAISS index; similarity retrieval | langchain-ollama, FAISS |
 | `rag_chain.py` | Retrieved chunks → cited prompt, handed to a provider to answer | `documind/llm/` |
 | `documind/llm/` | `LLMProvider` — what the app asks of a model; `OllamaProvider` — the chat, vision and document-answer calls to Ollama | langchain-ollama, ollama, Pillow |

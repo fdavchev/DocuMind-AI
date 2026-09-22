@@ -62,8 +62,8 @@ commit, each verified against the full pytest suite and a live
 | 1 | `AppConfig` | ✅ committed `f851d30c` | `Phase 6: Add AppConfig, replacing scattered config constants.` | 93 |
 | 2 | `Document`, `ExtractedPage`, `Chunk` | ✅ committed `6f99aa85` | `Add Document, ExtractedPage and Chunk value objects.` | 102 |
 | 3 | `Message`, `ChatSession` | ✅ committed `12a3236f` | `Add Message and ChatSession, replacing chat_history.py` | 119 |
-| 4 | `LLMProvider` (ABC), `OllamaProvider` | ✅ committed `3470a79` (check again Filip changed this manually) | `Add LLMProvider and OllamaProvider, replacing llm_chain.py` | 137 | 
-| 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ⬜ not started | — | — |
+| 4 | `LLMProvider` (ABC), `OllamaProvider` | ✅ committed `3470a79` | `Add LLMProvider and OllamaProvider, replacing llm_chain.py` | 137 | 
+| 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ✅ built, awaiting commit | `Add DocumentLoader, PdfLoader and TextLoader, moving PDF loading out of pdf_handler.py` | 170 |
 | 6 | `LoaderFactory` | ⬜ not started | — | — |
 | 7 | `TextSplitter` | ⬜ not started | — | — |
 | 8 | `VectorStore` | ⬜ not started | — | — |
@@ -130,7 +130,7 @@ class ChatSession:
 
 **Files changed:** `app.py`, `llm_chain.py`, `docs/architecture.md`, `README.md` (both had stale references to the now-deleted `chat_history.py`; README tree also gained `documind/`, missing since item 1). **Deleted:** `chat_history.py` (grep-confirmed zero importers first). **Created test:** `tests/test_chat_session.py`, including a test that `.messages` returns a copy — mutating the returned tuple/a list built from it does not affect session state.
 
-### Item 4 — `LLMProvider`, `OllamaProvider` (built + verified, **not yet committed**)
+### Item 4 — `LLMProvider`, `OllamaProvider` (committed `3470a79`)
 
 **Built:** `documind/llm/__init__.py`, `documind/llm/llm_provider.py`:
 ```python
@@ -157,32 +157,29 @@ Both `stream_rag_answer` and `stream_rag_answer_from_documents` gained an option
 
 **Files changed:** `app.py`, `rag_chain.py`, `documind/chat/chat_session.py` (stale comment fix), `docs/architecture.md`, `README.md`, plus `test_rag_chain.py`/`test_integration.py` (their Ollama-monkeypatch target moved from `rag_chain.ollama.chat` to `documind.llm.ollama_provider.ollama` — same underlying module object). **Deleted:** `llm_chain.py` (grep-confirmed). **Created test:** `tests/test_ollama_provider.py` (18 tests) — includes one that builds a throwaway `FakeProvider` subclass and one asserting an incomplete `LLMProvider` subclass raises `TypeError` (proves the ABC actually enforces its contract).
 
-**⚠️ Not committed yet — run `git status` to confirm current state before starting item 5.**
+---
+
+### Item 5 — `DocumentLoader`, `PdfLoader`, `TextLoader` (built + verified, **not yet committed**)
+
+**Built:** `documind/documents/document_loader.py` — `DocumentLoader(ABC)`: `SUPPORTED_EXTENSIONS`, `DEFAULT_NAME`, `__init__(config)`, `supports(filename)` (classmethod, case-insensitive extension match), abstract `_extract_pages(file)`, and the `load(file, name=None)` template method (resolve name → `UnsupportedFileError` if extension unhandled → `_extract_pages` → wrap in `Document` → `EmptyDocumentError` if empty). `documind/documents/pdf_loader.py` — `PdfLoader(config, use_ocr=True)`, `.pdf` only, plus `scanned_page_count(file)` moved in from `pdf_handler`. `documind/documents/text_loader.py` — `TextLoader`, `.txt`/`.md`, UTF-8 then cp1251 fallback, whole file as page 1.
+
+**OCR-fallback logic:** machine-diff confirmed `PdfLoader._extract_pages` is byte-identical to the old `pdf_handler.extract_pages_from_pdf` body (only self/param renames) — same 20-char `MIN_CHARS_FOR_TEXT_LAYER` threshold, same `len(ocr_pages) > config.max_ocr_pages` → `ScannedPdfTooLong` guard, same per-page OCR threading. Calls `ocr.page_needs_ocr`/`ocr.ocr_page` directly, no `OcrEngine` wrapper.
+
+**New errors:** `EmptyDocumentError`, `UnsupportedFileError` added to `errors.py`'s existing `FriendlyError` hierarchy.
+
+**`pdf_handler.py` — partially retained, not deleted.** Grep found live importers outside this item's scope (`app.py`'s `load_pdf_as_chunks`/`scanned_page_count`, plus several test files, and `split_document_into_chunks` which is item 7's job). So `pdf_handler.py`'s loading half now just delegates to `PdfLoader`'s public API: `load_pdf_as_document` calls `PdfLoader(config, use_ocr=use_ocr).load(uploaded_file, name=name)`, catching `EmptyDocumentError` to preserve the existing "return empty `Document`" behavior `app.py` depends on (it distinguishes "scanned, no OCR" from "genuinely blank" itself). `extract_pages_from_pdf` and `scanned_page_count` are now thin wrappers. `pdf_handler.py` no longer imports `pdfplumber` or `ocr` — only the LangChain splitter logic remains (item 7's territory), and its header comment says it goes away once that moves. **This is the seam items 7/9/10 need to know about.**
+
+**One spec deviation:** `load()` takes an optional `name` param (`load(self, file, name=None)`) to preserve `load_pdf_as_document(pdf, name="thesis.pdf")`'s existing explicit-naming capability, pinned by existing tests. `load(file)` alone still works as specified.
+
+**Files changed:** `errors.py`, `pdf_handler.py` (loading delegated, not deleted), `README.md`, `docs/architecture.md`, `docs/class-notes.md` (new item-5 section). **Created test:** `tests/test_document_loader.py` (33 tests, including 3 `test_both_loaders_*` tests running identical assertions over `PdfLoader`/`TextLoader` — the polymorphism exhibit — and an ABC-enforcement test).
+
+**Tests:** 170 passing (137 + 33 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
+
+**⚠️ Not committed yet — run `git status` to confirm current state before starting item 6.**
 
 ---
 
 ## Full spec for remaining items
-
-### Item 5 — `DocumentLoader` (ABC), `PdfLoader`, `TextLoader`
-
-Target files: `documind/documents/document_loader.py`, `documind/documents/pdf_loader.py`, `documind/documents/text_loader.py`.
-
-```python
-class DocumentLoader(ABC):
-    SUPPORTED_EXTENSIONS: tuple[str, ...] = ()
-    def __init__(self, config: AppConfig): ...
-    @abstractmethod
-    def _extract_pages(self, file) -> list[ExtractedPage]: ...
-    def load(self, file) -> Document:          # template method: validate → _extract_pages → wrap in Document → raise EmptyDocumentError if empty
-    @classmethod
-    def supports(cls, filename: str) -> bool: ...
-```
-
-- `PdfLoader._extract_pages` absorbs `pdf_handler.extract_pages_from_pdf`'s per-page OCR-fallback logic **verbatim** — same 20-char (`MIN_CHARS_FOR_TEXT_LAYER`) threshold, same `config.max_ocr_pages` guard raising `ScannedPdfTooLong`. Calls `ocr.py`'s existing functions (`page_needs_ocr`, `ocr_page`) directly — no `OcrEngine` wrapper (cut from scope).
-- `TextLoader` is new but trivial: `.txt`/`.md`, try UTF-8 first, fall back to cp1251 for older Macedonian files. Exists purely to give the ABC a second subclass so polymorphism/inheritance are demonstrated from two real implementations, not asserted from one (this reasoning is spelled out in `project-report-2.md` §4.4 — worth quoting in the class-notes entry).
-- No `ImageLoader` (cut from scope).
-- Define `EmptyDocumentError`, `UnsupportedFileError` **inside the existing `errors.py` hierarchy** (subclassing `FriendlyError`) — do not create a parallel exception hierarchy.
-- Delete `pdf_handler.py` once `PdfLoader` fully covers it (grep-confirm no other importers first — `app.py` and possibly `vector_store.py` tests may still reference it).
 
 ### Item 6 — `LoaderFactory`
 

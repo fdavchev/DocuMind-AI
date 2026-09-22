@@ -1,12 +1,14 @@
 # pdf_handler.py
 #
 # WHAT THIS FILE DOES:
-# 1. Takes a PDF file uploaded by the user
-# 2. Extracts the text of every page as an ExtractedPage, KEEPING the page
-#    number and recording whether the page had to be read by OCR
-# 3. Bundles those pages into a Document — the file's name plus its pages
-# 4. Splits that document into small overlapping Chunks, each one carrying the
-#    file it came from and the page it was found on
+# Splits a Document into small overlapping Chunks, each one carrying the file it
+# came from and the page it was found on.
+#
+# The reading half of this file — page extraction, the OCR fallback, and
+# bundling pages into a Document — now lives in documind/documents/pdf_loader.py
+# as PdfLoader. What is left here are the chunking functions and thin wrappers
+# that keep the old call sites working until the splitter moves out too; then
+# this file goes away entirely.
 #
 # WHY CHUNKS?
 # A PDF might be 100 pages. We can't send all of it to the LLM at once
@@ -23,13 +25,12 @@
 # page, so "p. 4" in an answer is always accurate. The cost is a few extra
 # short chunks at page ends — cheap compared to a wrong citation.
 
-import pdfplumber
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-import ocr
 from documind.config import AppConfig
 from documind.documents.models import Chunk, Document, ExtractedPage
-from errors import ScannedPdfTooLong
+from documind.documents.pdf_loader import PdfLoader
+from errors import EmptyDocumentError
 
 
 def extract_pages_from_pdf(
@@ -46,39 +47,9 @@ def extract_pages_from_pdf(
 
     Set use_ocr=False to force the text-layer-only path.
     """
-    pages: list[ExtractedPage] = []
-
-    with pdfplumber.open(uploaded_file) as pdf:
-        ocr_pages = [
-            page for page in pdf.pages if ocr.page_needs_ocr(page.extract_text())
-        ]
-        ocr_wanted = use_ocr and ocr_pages and ocr.is_available()
-
-        # Refuse up front rather than starting an OCR pass we know will take
-        # minutes — the same principle as the upload size gate.
-        if ocr_wanted and len(ocr_pages) > config.max_ocr_pages:
-            raise ScannedPdfTooLong(
-                getattr(uploaded_file, "name", "The file"),
-                len(ocr_pages),
-                config.max_ocr_pages,
-            )
-
-        for page_number, page in enumerate(pdf.pages, start=1):
-            page_text = page.extract_text()
-            used_ocr = False
-
-            if ocr.page_needs_ocr(page_text) and ocr_wanted:
-                page_text = ocr.ocr_page(page)
-                used_ocr = True
-
-            if page_text and page_text.strip():  # image-only pages return None
-                pages.append(
-                    ExtractedPage(
-                        number=page_number, text=page_text, used_ocr=used_ocr
-                    )
-                )
-
-    return pages
+    return list(
+        load_pdf_as_document(uploaded_file, use_ocr=use_ocr, config=config).pages
+    )
 
 
 def scanned_page_count(uploaded_file) -> int:
@@ -88,8 +59,7 @@ def scanned_page_count(uploaded_file) -> int:
     Used to tell "this PDF is scanned and we need OCR" apart from "this PDF is
     genuinely empty", which are different problems with different remedies.
     """
-    with pdfplumber.open(uploaded_file) as pdf:
-        return sum(1 for page in pdf.pages if ocr.page_needs_ocr(page.extract_text()))
+    return PdfLoader(AppConfig()).scanned_page_count(uploaded_file)
 
 
 def load_pdf_as_document(
@@ -103,12 +73,21 @@ def load_pdf_as_document(
 
     `name` defaults to the uploaded file's own name, which is what the UI shows
     next to the page number in a citation.
+
+    An unreadable PDF comes back as an empty Document rather than as an error,
+    because app.py's upload handler answers that case itself: it asks
+    no_text_error() whether the file was scanned or genuinely blank, which is a
+    distinction the loader cannot make. PdfLoader.load() raises
+    EmptyDocumentError instead, and the pipeline moves onto that behaviour when
+    RagPipeline takes over the upload flow.
     """
     if name is None:
         name = getattr(uploaded_file, "name", "document.pdf")
 
-    pages = extract_pages_from_pdf(uploaded_file, use_ocr=use_ocr, config=config)
-    return Document(name=name, pages=tuple(pages))
+    try:
+        return PdfLoader(config, use_ocr=use_ocr).load(uploaded_file, name=name)
+    except EmptyDocumentError:
+        return Document(name=name, pages=())
 
 
 def extract_text_from_pdf(uploaded_file, config: AppConfig = AppConfig()) -> str:

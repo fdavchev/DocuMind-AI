@@ -147,3 +147,47 @@ for a hosted API or a different local runtime means writing one new class with
 those four methods and changing the single line in `app.py` that builds the
 provider; `rag_chain.py`, the chat loop and the image path would not change by a
 character, because none of them imports `ollama` any more.
+
+## DocumentLoader, PdfLoader and TextLoader (`documind/documents/`)
+
+`DocumentLoader` says what it means to read an uploaded file into a `Document`,
+without saying anything about what kind of file it is. Its `load()` method does
+the work that is the same whatever was uploaded: check the extension is one this
+loader handles, ask for the pages, wrap them in a `Document` named after the
+upload, and refuse a file that turned out to contain no text. The one step it
+does not do itself is the extraction, which is declared abstract — so `load()`
+is written once on the base class and the two subclasses supply only the step
+that is genuinely their own. `PdfLoader` reads a PDF page by page and falls back
+to OCR on pages with no text layer; `TextLoader` decodes a `.txt` or `.md` file
+and calls the whole thing page 1.
+
+This is the *template method* pattern, and it is the clearest inheritance
+example in the project. A new loader — for `.docx`, say — is one class with one
+method; it cannot forget to validate the extension, cannot name the document
+differently, and cannot return an empty `Document` to a caller that was not
+expecting one, because it never writes that code. Contrast it with the old
+`pdf_handler.extract_pages_from_pdf`: a module-level function, so a second
+format would have meant a second function with its own copy of the checks, and
+whatever called it would need an `if` deciding which one to call.
+
+Building a second loader was a deliberate decision rather than a feature the app
+asked for. One subclass cannot demonstrate polymorphism, it can only assert it —
+with two, the claim becomes something the tests check: the same `load()` call
+serves a scanned PDF and a plain text file, and `test_both_loaders_*` runs the
+identical assertions over both loaders in one loop, which is only possible
+because nothing in those tests knows which kind of file it is holding.
+`TextLoader` tries UTF-8 first and falls back to Windows-1251, which is what
+older Macedonian documents were written in; those bytes are not valid UTF-8, so
+the first attempt raises instead of producing nonsense, which is what makes
+trying them in that order safe.
+
+The OCR logic moved into `PdfLoader` unchanged — the same 20-character threshold
+for "this page has no real text layer", the same refusal of a document needing
+OCR on more pages than `AppConfig.max_ocr_pages`. `PdfLoader` calls the
+functions in `ocr.py` directly rather than through a wrapper class, because
+whether Tesseract is installed is a fact about the machine, not a choice between
+strategies, and a class around two functions would add a name without adding a
+decision. The two new failure cases, `EmptyDocumentError` and
+`UnsupportedFileError`, were added to the existing hierarchy in `errors.py` as
+`FriendlyError` subclasses, so `app.py`'s one "catch a friendly error, render
+its message and hint" handler already covers them without a line of new UI code.

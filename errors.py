@@ -113,6 +113,37 @@ class NoTextInPdf(FriendlyError):
         )
 
 
+class EmptyDocumentError(FriendlyError):
+    """A file was read successfully and contained no text worth keeping."""
+
+    def __init__(self, filename: str):
+        super().__init__(
+            f"**Nothing could be read from {filename}.** Every page came back "
+            "empty.",
+            "If it is a scanned document, OCR has to be available to read it — "
+            "otherwise check the file actually contains text.",
+        )
+        self.filename = filename
+
+
+class UnsupportedFileError(FriendlyError):
+    """The file type isn't one any loader in the project can read."""
+
+    def __init__(self, filename: str, supported: tuple[str, ...] = ()):
+        readable = ", ".join(f"`{extension}`" for extension in supported)
+        hint = (
+            f"Supported formats: {readable}."
+            if readable
+            else "Convert it to PDF or plain text and upload it again."
+        )
+        super().__init__(
+            f"**{filename} isn't a file type this app can read.**",
+            hint,
+        )
+        self.filename = filename
+        self.supported = tuple(supported)
+
+
 class OcrUnavailable(FriendlyError):
     """A scanned PDF was detected, but Tesseract isn't installed to read it."""
 
