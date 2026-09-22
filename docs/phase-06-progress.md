@@ -63,8 +63,8 @@ commit, each verified against the full pytest suite and a live
 | 2 | `Document`, `ExtractedPage`, `Chunk` | ✅ committed `6f99aa85` | `Add Document, ExtractedPage and Chunk value objects.` | 102 |
 | 3 | `Message`, `ChatSession` | ✅ committed `12a3236f` | `Add Message and ChatSession, replacing chat_history.py` | 119 |
 | 4 | `LLMProvider` (ABC), `OllamaProvider` | ✅ committed `3470a79` | `Add LLMProvider and OllamaProvider, replacing llm_chain.py` | 137 | 
-| 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ✅ built, awaiting commit | `Add DocumentLoader, PdfLoader and TextLoader, moving PDF loading out of pdf_handler.py` | 170 |
-| 6 | `LoaderFactory` | ⬜ not started | — | — |
+| 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ✅ committed `1355696` | `Add DocumentLoader, PdfLoader and TextLoader, moving PDF loading out of pdf_handler.py` | 170 |
+| 6 | `LoaderFactory` | ✅ built, awaiting commit | `Add LoaderFactory, dispatching uploads to PdfLoader or TextLoader by extension` | 190 |
 | 7 | `TextSplitter` | ⬜ not started | — | — |
 | 8 | `VectorStore` | ⬜ not started | — | — |
 | 9 | `RagPipeline` | ⬜ not started | — | — |
@@ -159,7 +159,7 @@ Both `stream_rag_answer` and `stream_rag_answer_from_documents` gained an option
 
 ---
 
-### Item 5 — `DocumentLoader`, `PdfLoader`, `TextLoader` (built + verified, **not yet committed**)
+### Item 5 — `DocumentLoader`, `PdfLoader`, `TextLoader` (committed `1355696`)
 
 **Built:** `documind/documents/document_loader.py` — `DocumentLoader(ABC)`: `SUPPORTED_EXTENSIONS`, `DEFAULT_NAME`, `__init__(config)`, `supports(filename)` (classmethod, case-insensitive extension match), abstract `_extract_pages(file)`, and the `load(file, name=None)` template method (resolve name → `UnsupportedFileError` if extension unhandled → `_extract_pages` → wrap in `Document` → `EmptyDocumentError` if empty). `documind/documents/pdf_loader.py` — `PdfLoader(config, use_ocr=True)`, `.pdf` only, plus `scanned_page_count(file)` moved in from `pdf_handler`. `documind/documents/text_loader.py` — `TextLoader`, `.txt`/`.md`, UTF-8 then cp1251 fallback, whole file as page 1.
 
@@ -175,15 +175,38 @@ Both `stream_rag_answer` and `stream_rag_answer_from_documents` gained an option
 
 **Tests:** 170 passing (137 + 33 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
 
-**⚠️ Not committed yet — run `git status` to confirm current state before starting item 6.**
+---
+
+### Item 6 — `LoaderFactory` (built + verified, **not yet committed**)
+
+**Built:** `documind/documents/loader_factory.py`:
+```python
+class LoaderFactory:
+    LOADERS: tuple[type[DocumentLoader], ...] = (PdfLoader, TextLoader)   # the registry — one place
+    def __init__(self, config: AppConfig)
+    @classmethod
+    def supported_extensions(cls) -> tuple[str, ...]      # deduped union, read off the loaders
+    def create_loader(self, filename: str) -> DocumentLoader
+```
+`create_loader` walks `LOADERS`, returns `loader(self._config)` for the first whose `supports(filename)` is true, else raises `UnsupportedFileError(filename, supported=self.supported_extensions())`. Zero extension strings live in the factory itself — dispatch holds nothing format-specific.
+
+**Naming deviation:** chose `create_loader` over the thesis plan doc's `for_file` sketch (that snippet is already non-literal — it references a cut `OcrEngine`/`ImageLoader`) to match this repo's verb-first method convention (`load`, `supports`, `add_user`, `stream_chat`, `ingest`).
+
+**Added beyond the sketch:** `supported_extensions()` classmethod — needed anyway to fill `UnsupportedFileError`'s `supported=` arg, and can feed `st.file_uploader(type=...)` at item 10 without extra work.
+
+**Judgment call:** returns a **fresh** loader per call rather than caching instances, because `PdfLoader`/`TextLoader` read from (and `TextLoader` seeks) the file object — a shared cached instance could hold another caller's half-read upload. Pinned by `test_each_call_returns_a_fresh_loader`.
+
+**Open-closed exhibit for the defence:** tests define an `HtmlLoader` the factory has never seen, register it via a one-line subclass (`class HtmlAwareFactory(LoaderFactory): LOADERS = LoaderFactory.LOADERS + (HtmlLoader,)`), and show it dispatches correctly with zero edits to dispatch logic.
+
+**Files changed:** `docs/class-notes.md` (new section), `README.md` (tree + test-coverage table), `docs/architecture.md` (documents/ row mentions LoaderFactory). No changes to `app.py`, `errors.py`, or `pdf_handler.py` — `LoaderFactory` isn't wired into the upload flow yet (that's item 10). **Created test:** `tests/test_loader_factory.py` (20 tests).
+
+**Tests:** 190 passing (170 + 20 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
+
+**⚠️ Not committed yet — run `git status` to confirm current state before starting item 7.**
 
 ---
 
 ## Full spec for remaining items
-
-### Item 6 — `LoaderFactory`
-
-Target file: `documind/documents/loader_factory.py`. Dispatches by filename extension across `PdfLoader`/`TextLoader` (constructed with the same `AppConfig`). Raises `UnsupportedFileError` for anything else (e.g. `.docx`).
 
 ### Item 7 — `TextSplitter`
 

@@ -191,3 +191,33 @@ decision. The two new failure cases, `EmptyDocumentError` and
 `UnsupportedFileError`, were added to the existing hierarchy in `errors.py` as
 `FriendlyError` subclasses, so `app.py`'s one "catch a friendly error, render
 its message and hint" handler already covers them without a line of new UI code.
+
+## LoaderFactory (`documind/documents/loader_factory.py`)
+
+`LoaderFactory` takes a filename and hands back the loader that can read it,
+already built with the app's `AppConfig`. It is the only place in the project
+that knows the full list of readable file types: it keeps the loader classes in
+one tuple, walks them asking each `supports(filename)`, and returns the first
+that says yes. A file nobody claims raises `UnsupportedFileError`, listing the
+extensions that would have worked — a message the existing error handler in
+`app.py` already renders.
+
+It was written this way so the file-type decision lives in one object instead of
+leaking into the upload handler as an `if name.endswith(".pdf") … elif … else`
+chain that every future caller would have to repeat. What makes that possible is
+that the factory contains no extension strings at all: each loader declares its
+own formats and answers for itself, so the dispatch loop holds no knowledge of
+any particular type. Returning a fresh loader per call is deliberate too —
+loaders are cheap, and one caller's loader can then never be left holding
+another caller's half-read upload.
+
+This is the thesis's *factory pattern* exhibit, and the clearest case of the
+open-closed principle in the project: the class is open to new file types and
+closed to modification. Adding `.docx` support means writing one
+`DocumentLoader` subclass and adding its name to the `LOADERS` tuple — the
+dispatch method itself cannot need editing, because there is nothing in it
+specific to any format. The tests prove exactly that: they define an `HtmlLoader`
+the factory has never heard of, register it in a one-line subclass, and show it
+being dispatched to while the existing loaders and the refusal path go on
+behaving identically. Together with `DocumentLoader`'s polymorphism, this is what
+lets the rest of the app hold a loader without ever knowing what was uploaded.

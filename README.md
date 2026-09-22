@@ -102,7 +102,7 @@ DocuMind-AI/
 ├── config.py           # UI vocabulary only: mode names and avatars
 ├── documind/           # The object-oriented core, introduced class by class
 │   ├── config.py           # AppConfig — every tunable setting in one frozen object
-│   ├── documents/          # Document value objects + DocumentLoader, PdfLoader, TextLoader
+│   ├── documents/          # Document value objects + DocumentLoader, PdfLoader, TextLoader, LoaderFactory
 │   ├── chat/               # Message + ChatSession — the conversation and its export
 │   └── llm/                # LLMProvider + OllamaProvider — every call to the model
 ├── tests/              # pytest suite — runs offline, no Ollama required
@@ -116,6 +116,7 @@ DocuMind-AI/
 │   ├── test_chat_session.py# conversation state, export format, encapsulation
 │   ├── test_ollama_provider.py # the model calls, with Ollama faked
 │   ├── test_document_loader.py # the loaders: one load(), two file types
+│   ├── test_loader_factory.py # picking the loader for a filename
 │   └── test_app_smoke.py   # app.py actually starts, with and without Ollama
 ├── docs/architecture.md# Architecture chapter draft (components, pipeline, limitations)
 ├── DECISIONS.md        # Running log of design decisions and their rationale
@@ -272,6 +273,7 @@ pytest
 |------|--------|
 | `test_pdf_handler.py` | Page-accurate extraction, chunking, empty/scanned-page handling |
 | `test_document_loader.py` | The loader contract: one `load()` shared by `PdfLoader` and `TextLoader` |
+| `test_loader_factory.py` | Dispatch by extension, unsupported-file refusal, registering a new loader |
 | `test_vector_store.py` | FAISS indexing, metadata survival, multi-document retrieval |
 | `test_rag_chain.py` | Citation formatting, prompt rules, streaming from a stubbed Ollama |
 | `test_integration.py` | Full pipeline: PDF bytes → chunks → FAISS → prompt → answer |
