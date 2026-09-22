@@ -221,3 +221,34 @@ the factory has never heard of, register it in a one-line subclass, and show it
 being dispatched to while the existing loaders and the refusal path go on
 behaving identically. Together with `DocumentLoader`'s polymorphism, this is what
 lets the rest of the app hold a loader without ever knowing what was uploaded.
+
+## TextSplitter (`documind/documents/text_splitter.py`)
+
+`TextSplitter` takes a `Document` and returns the list of `Chunk`s it becomes —
+each one small enough to embed and to fit in a prompt, and each one tagged with
+the document it came from and the page it was found on. It works one page at a
+time: the underlying splitter is called per page and never sees two pages at
+once, which is what guarantees no chunk is ever assembled across a page
+boundary. That is `DECISIONS.md` #1, and it is what makes a citation honest —
+a passage built from the end of page 3 and the start of page 4 has no single
+true page number, so any "p. 4" attached to it would be a guess.
+
+The class exists to keep LangChain's `RecursiveCharacterTextSplitter` behind a
+door. That is the only class in the project that names it, and the only place
+the chunk size, the overlap and the list of separators are configured; they come
+off `AppConfig` rather than being written here twice. Everything else asks for
+`Chunk`s and gets `Chunk`s, never learning which library produced them or that
+the library's own `split_text()` hands back bare strings with no provenance
+attached at all. Replacing it with a token-aware or sentence-aware splitter is
+therefore a change inside one class, and the page tagging cannot be lost in that
+swap because it is written here and not at the call sites.
+
+The principle on show is *single responsibility* plus encapsulation of a
+third-party dependency. The old `pdf_handler.py` did two unrelated jobs —
+reading files and cutting them up — in one module; with the reading half already
+moved to `PdfLoader`, this finishes the split, and `pdf_handler.py` is now
+nothing but thin wrappers around the two classes. `split_document_into_chunks`
+was kept as one of those wrappers rather than deleted, because `app.py` and
+several test files still call it and rewiring them is a later step; it now
+delegates through `TextSplitter`'s public method instead of holding any logic of
+its own, the same pattern `load_pdf_as_document` follows for `PdfLoader`.

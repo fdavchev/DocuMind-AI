@@ -64,8 +64,8 @@ commit, each verified against the full pytest suite and a live
 | 3 | `Message`, `ChatSession` | ✅ committed `12a3236f` | `Add Message and ChatSession, replacing chat_history.py` | 119 |
 | 4 | `LLMProvider` (ABC), `OllamaProvider` | ✅ committed `3470a79` | `Add LLMProvider and OllamaProvider, replacing llm_chain.py` | 137 | 
 | 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ✅ committed `1355696` | `Add DocumentLoader, PdfLoader and TextLoader, moving PDF loading out of pdf_handler.py` | 170 |
-| 6 | `LoaderFactory` | ✅ built, awaiting commit | `Add LoaderFactory, dispatching uploads to PdfLoader or TextLoader by extension` | 190 |
-| 7 | `TextSplitter` | ⬜ not started | — | — |
+| 6 | `LoaderFactory` | ✅ committed `b2f93d0c` (⚠️ commit message says "DocumentLoader/PdfLoader/TextLoader" — item 5's message got reused by mistake; content is correct, message is wrong) | `Add LoaderFactory, dispatching uploads to PdfLoader or TextLoader by extension` | 190 |
+| 7 | `TextSplitter` | ✅ built, awaiting commit | `Add TextSplitter, moving page-by-page chunking out of pdf_handler.py` | 206 |
 | 8 | `VectorStore` | ⬜ not started | — | — |
 | 9 | `RagPipeline` | ⬜ not started | — | — |
 | 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py` | ⬜ not started | — | — |
@@ -177,7 +177,7 @@ Both `stream_rag_answer` and `stream_rag_answer_from_documents` gained an option
 
 ---
 
-### Item 6 — `LoaderFactory` (built + verified, **not yet committed**)
+### Item 6 — `LoaderFactory` (committed `b2f93d0c`, commit message text is item 5's — content is correct)
 
 **Built:** `documind/documents/loader_factory.py`:
 ```python
@@ -202,15 +202,34 @@ class LoaderFactory:
 
 **Tests:** 190 passing (170 + 20 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
 
-**⚠️ Not committed yet — run `git status` to confirm current state before starting item 7.**
+---
+
+### Item 7 — `TextSplitter` (built + verified, **not yet committed**)
+
+**Built:** `documind/documents/text_splitter.py`:
+```python
+class TextSplitter:
+    def __init__(self, config: AppConfig)
+    def split(self, document: Document) -> list[Chunk]
+    def split_text(self, text: str) -> list[str]
+```
+`RecursiveCharacterTextSplitter` built once in `__init__` (not per call — safe, since it's stateless over strings, unlike item 6's loaders which hold file objects). `SEPARATORS = ["\n\n", "\n", ".", " "]` moved across unchanged as a module constant. `split()` body is the old `split_document_into_chunks` body verbatim, including the blank-chunk skip.
+
+**Deviation from sketch:** added `split_text(text) -> list[str]` alongside `split()`, because `pdf_handler.split_text_into_chunks` exists and is pinned by an existing test — without it, `pdf_handler.py` would still need to import `RecursiveCharacterTextSplitter` itself, defeating the point (TextSplitter is now the only place in the project naming LangChain's splitter). `split()` calls `split_text()` per page internally.
+
+**`pdf_handler.split_document_into_chunks`/`split_text_into_chunks`: kept as thin delegating wrappers**, matching item 5's pattern — live callers outside scope (`load_pdf_as_chunks` used by `app.py`, `test_vector_store.py`, `test_ocr.py`, `test_integration.py`; `test_pdf_handler.py` directly) meant full deletion wasn't possible yet. `pdf_handler.py` no longer imports `langchain_text_splitters` at all; header comment says the file holds nothing of its own now, only wrappers, and names item 10 as removal point.
+
+**"No chunk spans two pages" invariant:** `DECISIONS.md` #1's `test_no_chunk_spans_two_pages` (`tests/test_pdf_handler.py:152`) is untouched and still passing (now exercises the invariant through the delegating wrapper). Also ported directly onto `TextSplitter` in the new test file, plus a stronger case (`test_no_chunk_spans_two_pages_even_when_pages_are_short`) — pinned at both levels now.
+
+**Files changed:** `pdf_handler.py` (splitting delegated), `docs/class-notes.md` (new section), `README.md`, `docs/architecture.md`. **Created test:** `tests/test_text_splitter.py` (16 tests).
+
+**Tests:** 206 passing (190 + 16 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
+
+**⚠️ Not committed yet — run `git status` to confirm current state before starting item 8.**
 
 ---
 
 ## Full spec for remaining items
-
-### Item 7 — `TextSplitter`
-
-Target file: `documind/documents/text_splitter.py`. Wraps the existing per-page splitting logic from item 5/`pdf_handler.split_document_into_chunks` (or wherever it lands after item 5's rename) — wraps LangChain's `RecursiveCharacterTextSplitter` using `config.chunk_size`/`config.chunk_overlap`, split **per page**, tagging each resulting `Chunk` with its page number. **Must preserve the "no chunk spans two pages" invariant** — there is already a pinned test for this (`DECISIONS.md` #1), find it and keep it passing.
 
 ### Item 8 — `VectorStore`
 

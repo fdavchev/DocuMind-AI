@@ -1,35 +1,20 @@
 # pdf_handler.py
 #
 # WHAT THIS FILE DOES:
-# Splits a Document into small overlapping Chunks, each one carrying the file it
-# came from and the page it was found on.
+# Nothing of its own any more. Every function here is a thin wrapper that keeps
+# an old call site working while the classes it now delegates to take over.
 #
-# The reading half of this file — page extraction, the OCR fallback, and
-# bundling pages into a Document — now lives in documind/documents/pdf_loader.py
-# as PdfLoader. What is left here are the chunking functions and thin wrappers
-# that keep the old call sites working until the splitter moves out too; then
-# this file goes away entirely.
-#
-# WHY CHUNKS?
-# A PDF might be 100 pages. We can't send all of it to the LLM at once
-# (too many tokens). Instead we cut it into ~500-character pieces, store
-# them in FAISS, and only send the 3-5 most relevant pieces per question.
-#
-# WHY OVERLAP?
-# If a sentence is split across two chunks, the overlap (50 chars) ensures
-# neither chunk loses context at its edges.
-#
-# WHY SPLIT PAGE-BY-PAGE INSTEAD OF ONE BIG STRING?
-# Because a chunk that straddles a page boundary can't be cited honestly.
-# Splitting each page on its own means every chunk belongs to exactly one
-# page, so "p. 4" in an answer is always accurate. The cost is a few extra
-# short chunks at page ends — cheap compared to a wrong citation.
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# The reading half — page extraction, the OCR fallback, and bundling pages into
+# a Document — lives in documind/documents/pdf_loader.py as PdfLoader. The
+# chunking half — cutting a Document into page-tagged Chunks — lives in
+# documind/documents/text_splitter.py as TextSplitter, including the
+# page-by-page splitting that keeps a citation honest. This file goes away
+# entirely once app.py and the remaining callers talk to RagPipeline instead.
 
 from documind.config import AppConfig
 from documind.documents.models import Chunk, Document, ExtractedPage
 from documind.documents.pdf_loader import PdfLoader
+from documind.documents.text_splitter import TextSplitter
 from errors import EmptyDocumentError
 
 
@@ -100,21 +85,9 @@ def extract_text_from_pdf(uploaded_file, config: AppConfig = AppConfig()) -> str
     return load_pdf_as_document(uploaded_file, config=config).text
 
 
-def _make_splitter(config: AppConfig) -> RecursiveCharacterTextSplitter:
-    """
-    chunk_size   → how many characters each chunk holds
-    chunk_overlap → how many characters consecutive chunks share at the border
-    """
-    return RecursiveCharacterTextSplitter(
-        chunk_size=config.chunk_size,
-        chunk_overlap=config.chunk_overlap,
-        separators=["\n\n", "\n", ".", " "],  # try to split on natural boundaries
-    )
-
-
 def split_text_into_chunks(text: str, config: AppConfig = AppConfig()) -> list[str]:
     """Splits a plain string into overlapping chunks (no provenance)."""
-    return _make_splitter(config).split_text(text)
+    return TextSplitter(config).split_text(text)
 
 
 def split_document_into_chunks(
@@ -127,22 +100,7 @@ def split_document_into_chunks(
     That provenance is what survives into FAISS and comes back at retrieval
     time, which is how an answer can say "p. 4 of report.pdf".
     """
-    splitter = _make_splitter(config)
-    chunks: list[Chunk] = []
-
-    for page in document.pages:
-        for text in splitter.split_text(page.text):
-            if not text.strip():
-                continue
-            chunks.append(
-                Chunk(
-                    text=text,
-                    page_number=page.number,
-                    source_document=document.name,
-                )
-            )
-
-    return chunks
+    return TextSplitter(config).split(document)
 
 
 def load_pdf_as_chunks(
