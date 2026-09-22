@@ -104,7 +104,8 @@ DocuMind-AI/
 │   ├── config.py           # AppConfig — every tunable setting in one frozen object
 │   ├── documents/          # Document value objects + DocumentLoader, PdfLoader, TextLoader, LoaderFactory, TextSplitter
 │   ├── chat/               # Message + ChatSession — the conversation and its export
-│   └── llm/                # LLMProvider + OllamaProvider — every call to the model
+│   ├── llm/                # LLMProvider + OllamaProvider — every call to the model
+│   └── rag/                # VectorStore — chunks in, cited chunks out; FAISS stays inside
 ├── tests/              # pytest suite — runs offline, no Ollama required
 │   ├── conftest.py         # in-memory PDF builder + deterministic fake embeddings
 │   ├── test_pdf_handler.py # extraction, chunking, page metadata
@@ -118,6 +119,7 @@ DocuMind-AI/
 │   ├── test_document_loader.py # the loaders: one load(), two file types
 │   ├── test_loader_factory.py # picking the loader for a filename
 │   ├── test_text_splitter.py # page-by-page chunking and the page-boundary rule
+│   ├── test_rag_vector_store.py # the VectorStore class: indexing and the Chunk round trip
 │   └── test_app_smoke.py   # app.py actually starts, with and without Ollama
 ├── docs/architecture.md# Architecture chapter draft (components, pipeline, limitations)
 ├── DECISIONS.md        # Running log of design decisions and their rationale
@@ -277,6 +279,7 @@ pytest
 | `test_loader_factory.py` | Dispatch by extension, unsupported-file refusal, registering a new loader |
 | `test_text_splitter.py` | Page-by-page chunking, configured chunk size, no chunk across a page boundary |
 | `test_vector_store.py` | FAISS indexing, metadata survival, multi-document retrieval |
+| `test_rag_vector_store.py` | The `VectorStore` class: `Chunk` → FAISS → `Chunk`, retrieval width, indexed sources |
 | `test_rag_chain.py` | Citation formatting, prompt rules, streaming from a stubbed Ollama |
 | `test_integration.py` | Full pipeline: PDF bytes → chunks → FAISS → prompt → answer |
 | `test_errors.py` | Failure translation, pre-flight checks, upload validation |

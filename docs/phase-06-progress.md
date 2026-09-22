@@ -65,8 +65,8 @@ commit, each verified against the full pytest suite and a live
 | 4 | `LLMProvider` (ABC), `OllamaProvider` | ✅ committed `3470a79` | `Add LLMProvider and OllamaProvider, replacing llm_chain.py` | 137 | 
 | 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ✅ committed `1355696` | `Add DocumentLoader, PdfLoader and TextLoader, moving PDF loading out of pdf_handler.py` | 170 |
 | 6 | `LoaderFactory` | ✅ committed `b2f93d0c` (⚠️ commit message says "DocumentLoader/PdfLoader/TextLoader" — item 5's message got reused by mistake; content is correct, message is wrong) | `Add LoaderFactory, dispatching uploads to PdfLoader or TextLoader by extension` | 190 |
-| 7 | `TextSplitter` | ✅ built, awaiting commit | `Add TextSplitter, moving page-by-page chunking out of pdf_handler.py` | 206 |
-| 8 | `VectorStore` | ⬜ not started | — | — |
+| 7 | `TextSplitter` | ✅ committed `ad119feb` | `Add TextSplitter, moving page-by-page chunking out of pdf_handler.py` | 206 |
+| 8 | `VectorStore` | ✅ built, awaiting commit | `Add VectorStore, wrapping FAISS behind a Chunk-in, Chunk-out interface` | 226 |
 | 9 | `RagPipeline` | ⬜ not started | — | — |
 | 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py` | ⬜ not started | — | — |
 
@@ -204,7 +204,7 @@ class LoaderFactory:
 
 ---
 
-### Item 7 — `TextSplitter` (built + verified, **not yet committed**)
+### Item 7 — `TextSplitter` (committed `ad119feb`)
 
 **Built:** `documind/documents/text_splitter.py`:
 ```python
@@ -225,26 +225,47 @@ class TextSplitter:
 
 **Tests:** 206 passing (190 + 16 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
 
-**⚠️ Not committed yet — run `git status` to confirm current state before starting item 8.**
+---
+
+### Item 8 — `VectorStore` (built + verified, **not yet committed**)
+
+**Built:** `documind/rag/__init__.py`, `documind/rag/vector_store.py`:
+```python
+class VectorStore:
+    def __init__(self, config: AppConfig, embeddings=None)
+    def build(self, chunks: Sequence[Chunk]) -> None
+    def add(self, chunks: Sequence[Chunk]) -> None
+    def search(self, question: str, k: int | None = None) -> list[Chunk]
+    @property
+    def is_ready(self) -> bool
+    @property
+    def sources(self) -> tuple[str, ...]
+```
+
+**Deviations (deliberate):**
+1. `embeddings=None` kwarg — keeps DECISIONS.md #4's injectable embedding model working without needing a live Ollama in tests; built lazily on first `build()`.
+2. `sources` property added (wraps old `list_sources`) — needed by `_default_k` to know document count, and by item 10 to replace `st.session_state.pdf_filenames`. Returns sorted `tuple[str, ...]`.
+3. `add()` on an empty store now builds it instead of failing — removes the `if store is None: build else add` branch currently in `app.py:259-264`. `build()` still replaces the index outright.
+
+**Behavior flag for item 9:** `search()` on a not-ready store **raises** `RuntimeError`, doesn't return `[]` — an empty context would get a confidently wrong LLM answer; `app.py` already disables input until a store exists, so this is unreachable from the UI today but matters if `RagPipeline` calls `search()` directly.
+
+**Chunk round-trip complete (item 2's missing half):** `_as_documents` (in, unchanged shape) and new `_as_chunk` (out): `document.page_content` → `text`, `metadata.get("page", 0)` → `page_number`, `metadata.get("source", "")` → `source_document`. Tested via dataclass-equality round-trip and a real generated-PDF end-to-end test (loader → splitter → index → search).
+
+**`k` defaults:** `_resolve_k` uses `k` if given, else `_default_k()` reads `len(self.sources)`: `<=1` → `config.retrieval_k`, else → `config.retrieval_k_multi_document` — moves `app.py:351-355`'s rule inside the object, now reading the store's own indexed sources.
+
+**No persistence added** — `test_there_is_no_persistence_yet` asserts no `save`/`load` attributes exist, citing DECISIONS.md #9.
+
+**Old top-level `vector_store.py`:** untouched, still the only thing `app.py` imports (`build_vector_store`, `add_documents`, `retrieve_relevant_documents`) — rewiring is items 9/10.
+
+**Files changed:** `docs/class-notes.md` (new section), `README.md`, `docs/architecture.md`. **Created test:** `tests/test_rag_vector_store.py` (20 tests — separate file so the existing `tests/test_vector_store.py` for the old module functions stays untouched).
+
+**Tests:** 226 passing (206 + 20 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
+
+**⚠️ Not committed yet — run `git status` to confirm current state before starting item 9.**
 
 ---
 
 ## Full spec for remaining items
-
-### Item 8 — `VectorStore`
-
-Target file: `documind/rag/vector_store.py` (note: this is a NEW file in a new `documind/rag/` package — the old top-level `vector_store.py` stays for now and gets superseded, not necessarily deleted until item 9/10 confirm nothing else needs it).
-
-```python
-class VectorStore:
-    def __init__(self, config: AppConfig): ...
-    def build(self, chunks: Sequence[Chunk]) -> None: ...
-    def add(self, chunks: Sequence[Chunk]) -> None: ...          # multi-document support — mirrors old add_documents
-    def search(self, question: str, k: int | None = None) -> list[Chunk]: ...   # returns Chunk objects — this is where the Chunk→Document→Chunk round-trip conversion (noted as missing in item 2's record above) needs to be added
-    @property
-    def is_ready(self) -> bool: ...
-```
-Wraps the existing FAISS logic (`get_embeddings`, `build_vector_store`, `add_documents`, `retrieve_relevant_documents`, `list_sources`) from the old `vector_store.py`. **Do not implement `save`/`load` (persistence)** — explicitly deferred; `DECISIONS.md` #9 already has a reasoned decision not to have it yet. Don't relitigate that here.
 
 ### Item 9 — `RagPipeline`
 

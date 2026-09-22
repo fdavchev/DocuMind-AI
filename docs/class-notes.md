@@ -252,3 +252,46 @@ was kept as one of those wrappers rather than deleted, because `app.py` and
 several test files still call it and rewiring them is a later step; it now
 delegates through `TextSplitter`'s public method instead of holding any logic of
 its own, the same pattern `load_pdf_as_document` follows for `PdfLoader`.
+
+## VectorStore (`documind/rag/vector_store.py`)
+
+`VectorStore` is the searchable memory of everything that has been uploaded.
+`build` embeds a document's chunks into a new index, `add` joins a second
+document's chunks to the index already held so several files are searchable at
+once, `search` returns the passages closest in meaning to a question, and
+`is_ready` says whether there is anything to search yet. It is the only class in
+the project that names FAISS or an embedding model, and the only one that ever
+sees a LangChain `Document`.
+
+That last point is the design. FAISS cannot store a `Chunk`: it stores a string
+of text plus an untyped metadata dictionary. So a `Chunk` is flattened into
+`{"source": ..., "page": ...}` when it is indexed and rebuilt from those same
+two keys when it comes back, and both halves of that translation live in this
+one file, on two private methods, against two constants. Everything outside
+hands it `Chunk`s and receives `Chunk`s — the dictionary keys that make a
+citation work now exist only inside the boundary that requires them, which is
+what the `Chunk` value object was introduced for in the first place. Swapping
+FAISS for Chroma or pgvector would be a change inside this class and nowhere
+else, because no other file imports the library.
+
+The class also absorbs two decisions the caller used to have to make. How many
+passages to retrieve was an `if len(filenames) <= 1` sitting in `app.py`; it is
+now `_default_k`, which reads the store's own list of indexed sources and
+widens the window from `retrieval_k` to `retrieval_k_multi_document` once a
+second document is present (`DECISIONS.md` #3) — the store knows what it is
+holding, so the UI no longer has to keep a parallel list to answer for it.
+Whether an upload is the first one was a second such branch, and `add` on an
+empty store simply builds it, so both uploads are one call. There is deliberately
+no `save`/`load`: the index lives as long as the session does (`DECISIONS.md`
+#9), and a test asserts those methods are absent so persistence can only ever
+arrive as a decision rather than by accident.
+
+The principle on show is *encapsulation*, applied to a third-party library
+rather than to data. The embedding model stays injectable the way the old
+function's `embeddings=` argument was, which is what lets
+`tests/test_rag_vector_store.py` index and search for real — genuine FAISS,
+genuine similarity search — with a deterministic fake standing in for Ollama, on
+a machine that has never installed it. The round trip is pinned by
+`test_search_rebuilds_the_chunk_that_was_indexed`: it indexes one `Chunk`,
+searches for it, and asserts the object that comes back equals the one that went
+in.
