@@ -68,7 +68,7 @@ commit, each verified against the full pytest suite and a live
 | 7 | `TextSplitter` | ✅ committed `ad119feb` | `Add TextSplitter, moving page-by-page chunking out of pdf_handler.py` | 206 |
 | 8 | `VectorStore` | ✅ committed `c71a838b` | `Add VectorStore, wrapping FAISS behind a Chunk-in, Chunk-out interface` | 226 |
 | 9 | `RagPipeline` | ✅ committed `b3463bee` | `Add RagPipeline, orchestrating loading, chunking, retrieval and cited answers` | 264 |
-| 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py`/`vector_store.py` | ✅ built, awaiting commit | `Strip app.py to UI only, deleting pdf_handler.py, vector_store.py and rag_chain.py` | 227 (see item 10 record for the accounting) |
+| 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py`/`vector_store.py` | ✅ committed `faa4f918` | `Strip app.py to UI only, deleting pdf_handler.py, vector_store.py and rag_chain.py` | 227 (see item 10 record for the accounting) |
 
 ---
 
