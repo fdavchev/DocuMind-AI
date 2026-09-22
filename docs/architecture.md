@@ -53,7 +53,7 @@ module owns one step and can be tested in isolation.
 | `app.py` | Streamlit UI: mode selector, upload handling, chat loops, error rendering | every module below |
 | `pdf_handler.py` | Thin wrappers keeping the old call sites working while `documind/documents/` takes over | `documind/documents/` |
 | `documind/documents/` | `DocumentLoader` — the one way a file becomes a `Document`; `PdfLoader` (per-page text, OCR fallback) and `TextLoader` (`.txt`/`.md`) implement it; `LoaderFactory` picks between them by extension; `TextSplitter` cuts a `Document` into page-tagged `Chunk`s | pdfplumber, `ocr.py`, LangChain splitter |
-| `documind/rag/` | `VectorStore` — `Chunk`s in, the matching `Chunk`s back out; the FAISS index, the embedding model and the metadata keys all stay inside it | langchain-ollama, FAISS |
+| `documind/rag/` | `VectorStore` — `Chunk`s in, the matching `Chunk`s back out; the FAISS index, the embedding model and the metadata keys all stay inside it. `RagPipeline` — the upload and question paths end to end, built from a `LoaderFactory`, a `TextSplitter`, a `VectorStore` and an `LLMProvider`; it also writes the cited prompt and the Sources list | langchain-ollama, FAISS |
 | `vector_store.py` | The module-level FAISS functions `app.py` still calls, superseded by `documind/rag/` | langchain-ollama, FAISS |
 | `rag_chain.py` | Retrieved chunks → cited prompt, handed to a provider to answer | `documind/llm/` |
 | `documind/llm/` | `LLMProvider` — what the app asks of a model; `OllamaProvider` — the chat, vision and document-answer calls to Ollama | langchain-ollama, ollama, Pillow |

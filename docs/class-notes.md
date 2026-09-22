@@ -295,3 +295,50 @@ a machine that has never installed it. The round trip is pinned by
 `test_search_rebuilds_the_chunk_that_was_indexed`: it indexes one `Chunk`,
 searches for it, and asserts the object that comes back equals the one that went
 in.
+
+## RagPipeline and IngestReport (`documind/rag/rag_pipeline.py`)
+
+`RagPipeline` is the whole document side of the app behind two methods.
+`ingest(file)` turns an upload into something answerable — it asks the
+`LoaderFactory` for the loader that reads this file type, asks the `TextSplitter`
+to cut the resulting `Document` into page-tagged `Chunk`s, and hands those to the
+`VectorStore` — and returns an `IngestReport` saying what happened: the
+document's name, how many pages and chunks it became, how many pages needed OCR,
+and how long it took. `ask(question)` does the other half: retrieve the closest
+passages, write the cited prompt around them, and stream the answer from the
+`LLMProvider`. `last_sources` then holds exactly the passages that answer was
+built from, as a tuple, so the Sources panel under it numbers the same passages
+the prompt did.
+
+What makes it worth its own class is how little it does itself. It owns the order
+of the four calls and the prompt written around what came back — the RAG idea —
+and nothing else: no `pdfplumber`, no FAISS, no `ollama`, no chunk size, not even
+how many passages to retrieve. All four collaborators arrive through the
+constructor rather than being built inside, which is why the whole pipeline can
+be run offline — `tests/test_rag_pipeline.py` passes it a deterministic fake
+embedding model and a `FakeProvider` that implements `LLMProvider` and replays
+canned tokens, then asserts on the real prompt the real retrieval produced.
+
+This is the thesis's *composition and dependency injection* exhibit, and the
+clearest picture of what the refactor was for. The same work used to be spread
+across `app.py`, `pdf_handler.py`, `vector_store.py` and `rag_chain.py`, with the
+UI holding the intermediate values between them and deciding things it had no
+business deciding — whether this upload was the first one, how many passages to
+retrieve, what to do when a file produced no chunks. Those decisions have moved
+into the objects that know the answer, and what is left here is a short sentence
+of orchestration. Because every step is an interface rather than a module,
+swapping any one of them — a different splitter, a different vector database, a
+hosted model instead of Ollama — is a different constructor argument, not an edit
+to this file.
+
+The four prompt and citation functions from `rag_chain.py` moved onto this class
+rather than into a `PromptBuilder` of their own, because they depend on the order
+the passages came back in: the `[n]` markers the model is told to cite are
+positions in the list this object retrieved, and the Sources panel has to number
+that same list the same way. Keeping both on the object that holds the list is
+what makes the two impossible to get out of step. One decision worth naming: the
+store raises when it is searched before anything is indexed, and `ask` checks
+`is_ready` first and raises `NoDocumentsIndexed` instead — a `FriendlyError`, so
+the existing error handler renders it as a sentence the user can act on rather
+than as a `RuntimeError`. Answering from an empty context was never an option:
+the model would produce a confident answer with no document behind it.

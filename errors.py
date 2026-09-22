@@ -144,6 +144,17 @@ class UnsupportedFileError(FriendlyError):
         self.supported = tuple(supported)
 
 
+class NoDocumentsIndexed(FriendlyError):
+    """A question was asked before anything had been uploaded and indexed."""
+
+    def __init__(self):
+        super().__init__(
+            "**There is nothing to search yet.** No document has been uploaded "
+            "and indexed in this session.",
+            "Upload a PDF above, wait for it to finish indexing, then ask again.",
+        )
+
+
 class OcrUnavailable(FriendlyError):
     """A scanned PDF was detected, but Tesseract isn't installed to read it."""
 

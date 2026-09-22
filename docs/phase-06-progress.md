@@ -66,8 +66,8 @@ commit, each verified against the full pytest suite and a live
 | 5 | `DocumentLoader` (ABC), `PdfLoader`, `TextLoader` | ✅ committed `1355696` | `Add DocumentLoader, PdfLoader and TextLoader, moving PDF loading out of pdf_handler.py` | 170 |
 | 6 | `LoaderFactory` | ✅ committed `b2f93d0c` (⚠️ commit message says "DocumentLoader/PdfLoader/TextLoader" — item 5's message got reused by mistake; content is correct, message is wrong) | `Add LoaderFactory, dispatching uploads to PdfLoader or TextLoader by extension` | 190 |
 | 7 | `TextSplitter` | ✅ committed `ad119feb` | `Add TextSplitter, moving page-by-page chunking out of pdf_handler.py` | 206 |
-| 8 | `VectorStore` | ✅ built, awaiting commit | `Add VectorStore, wrapping FAISS behind a Chunk-in, Chunk-out interface` | 226 |
-| 9 | `RagPipeline` | ⬜ not started | — | — |
+| 8 | `VectorStore` | ✅ committed `c71a838b` | `Add VectorStore, wrapping FAISS behind a Chunk-in, Chunk-out interface` | 226 |
+| 9 | `RagPipeline` | ✅ built, awaiting commit | `Add RagPipeline, orchestrating loading, chunking, retrieval and cited answers` | 264 |
 | 10 | Strip `app.py`; delete `pdf_handler.py`/`rag_chain.py` | ⬜ not started | — | — |
 
 ---
@@ -227,7 +227,7 @@ class TextSplitter:
 
 ---
 
-### Item 8 — `VectorStore` (built + verified, **not yet committed**)
+### Item 8 — `VectorStore` (committed `c71a838b`)
 
 **Built:** `documind/rag/__init__.py`, `documind/rag/vector_store.py`:
 ```python
@@ -261,28 +261,56 @@ class VectorStore:
 
 **Tests:** 226 passing (206 + 20 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
 
-**⚠️ Not committed yet — run `git status` to confirm current state before starting item 9.**
-
 ---
 
 ## Full spec for remaining items
 
-### Item 9 — `RagPipeline`
+### Item 9 — `RagPipeline` (built + verified, **not yet committed**)
 
-Target file: `documind/rag/rag_pipeline.py`.
-
+**Built:** `documind/rag/rag_pipeline.py`:
 ```python
+@dataclass(frozen=True)
+class IngestReport:
+    document_name: str
+    page_count: int
+    chunk_count: int
+    ocr_page_count: int
+    elapsed_seconds: float
+    @property
+    def used_ocr(self) -> bool: ...      # ocr_page_count > 0
+
 class RagPipeline:
     def __init__(self, loader_factory: LoaderFactory, splitter: TextSplitter,
-                 vector_store: VectorStore, provider: LLMProvider): ...
-    def ingest(self, file) -> IngestReport: ...
-    def ask(self, question: str) -> Iterator[str]: ...
+                 vector_store: VectorStore, provider: LLMProvider)
+    def ingest(self, file, name: str | None = None) -> IngestReport
+    def ask(self, question: str) -> Iterator[str]
     @property
-    def last_sources(self) -> tuple[Chunk, ...]: ...
+    def last_sources(self) -> tuple[Chunk, ...]
+    def format_citation(self, chunk: Chunk) -> str
+    def build_context_block(self, chunks: Sequence[Chunk]) -> str
+    def format_sources_markdown(self, chunks: Sequence[Chunk] | None = None) -> str
+    def build_rag_prompt(self, context: str, question: str) -> str
 ```
-`IngestReport` — small dataclass: page count, chunk count, OCR page count, elapsed seconds (values already loosely available in `app.py`'s current upload flow — formalize them here).
 
-**Absorbs `rag_chain.py`'s prompt/citation functions** (`format_citation`, `build_context_block`, `format_sources_markdown`, `build_rag_prompt`) as `RagPipeline`'s own methods — there is no separate `PromptBuilder` (cut from scope). `RagPipeline.ask()` builds the prompt itself, then calls `self._provider.stream_answer(prompt)` — reusing the exact seam item 4 built (`provider` param on `stream_rag_answer`/`stream_rag_answer_from_documents`) means a `FakeProvider` test double should already be straightforward here; write one if it doesn't exist yet.
+**Deviations:** `IngestReport` gained `document_name` (5th field) and a derived `used_ocr` property — both matched to what `app.py`'s current upload UI actually needs to report. `ingest(file, name=None)` mirrors item 5's `DocumentLoader.load(file, name=None)` deviation, same reasoning. The four ported prompt/citation methods are **public** (not private) — `format_sources_markdown` is called directly by `app.py` under every answer and defaults to `last_sources` when called with no args. No `config` param — every collaborator already carries the `AppConfig` it needs.
+
+**Prompt/citation porting:** `build_rag_prompt`, `build_context_block`, `format_sources_markdown` ported **verbatim** from `rag_chain.py` (same rules, same `[n] citation` shape, same 200-char truncation as a new `EXCERPT_LIMIT` constant). Only `format_citation` was adapted — reads a `Chunk`'s typed fields (`chunk.source_document`, `chunk.page_number`) instead of a LangChain `Document`'s metadata dict; item 8's `_as_chunk` mapping missing page→`0`/missing source→`""` keeps the "unknown page" rendering identical to before.
+
+**"Nothing indexed yet" in `ask()`:** checks `vector_store.is_ready` before searching and raises a new `errors.NoDocumentsIndexed` (`FriendlyError` subclass) rather than letting item 8's `RuntimeError` propagate raw — so `app.py`'s existing generic error handler renders it as an actionable message at item 10 with zero new UI code, same pattern as item 5's `EmptyDocumentError`/`UnsupportedFileError`. `ask()` is a normal method (retrieval + prompt-building happen before the iterator is returned), so a refusal surfaces before any chat bubble opens, and `last_sources` is reset to `()` at the top of every `ask()` call so a refused question never leaves stale citations behind.
+
+**Provider seam:** reused item 4's `LLMProvider.stream_answer` exactly as built, not reinvented — `ask()` ends in `self._provider.stream_answer(prompt)`. No reusable `FakeProvider` existed yet (item 4's was a throwaway inline class); wrote a proper module-level one in `tests/test_rag_pipeline.py` (kept local to the file per this repo's existing fake-doubles convention; item 10 can lift it to `conftest.py` if needed there too).
+
+**Flag for item 10:** `ingest()` lets `EmptyDocumentError` propagate for a blank file — deliberately did **not** replicate `app.py`'s current finer-grained `no_text_error` ("scanned, OCR unavailable" vs "genuinely blank") distinction, since that needs `scanned_page_count` which only exists on `PdfLoader` and checking for it would break the loader polymorphism items 5/6 established. Item 10 should consciously decide whether to accept the coarser message or add a hook to the `DocumentLoader` ABC.
+
+**Files changed:** `errors.py` (new `NoDocumentsIndexed`), `docs/class-notes.md` (new section), `README.md`, `docs/architecture.md`. **Created test:** `tests/test_rag_pipeline.py` (38 tests, includes the `FakeProvider` double and 3 integration-style tests using real `LoaderFactory`/`TextSplitter`/`VectorStore`).
+
+**Tests:** 264 passing (226 + 38 new, nothing edited/deleted). **Streamlit:** boots clean, `/_stcore/health` → 200.
+
+**⚠️ Not committed yet — run `git status` to confirm current state before starting item 10.**
+
+---
+
+## Full spec for remaining items
 
 ### Item 10 — Strip `app.py` to UI-only
 
