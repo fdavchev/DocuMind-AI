@@ -27,7 +27,8 @@
 # One index holds the chunks of several documents at once. Each chunk keeps its
 # source filename, so an answer can draw on the best passages across every file
 # and still say which one each came from. `add()` is what makes that work: a
-# second upload joins the existing index instead of replacing it.
+# second upload joins the existing index instead of replacing it. `remove()` is
+# its counterpart: one file's chunks leave the index and the others stay.
 #
 # NO SAVING TO DISK:
 # There is deliberately no save/load here. The index lives for as long as the
@@ -93,6 +94,38 @@ class VectorStore:
             return
 
         self._store.add_documents(self._as_documents(chunks))
+
+    def remove(self, source_name: str) -> None:
+        """
+        Takes one document's chunks out of the index, leaving the rest searchable.
+
+        This is what lets the user drop a single file without clearing
+        everything. The chunks are deleted by id rather than the index being
+        rebuilt from what is left: a rebuild would send every remaining chunk
+        back through the embedding model, which takes as long as the original
+        uploads and needs Ollama to be running just to forget a file.
+
+        Removing the last document returns the store to the "nothing indexed
+        yet" state rather than keeping an empty index, so `is_ready` and
+        `sources` read exactly as they did before the first upload. A name that
+        is not indexed is a no-op, since there is nothing of it to remove.
+        """
+        if self._store is None:
+            return
+
+        ids_to_delete = [
+            document_id
+            for document_id, document in self._store.docstore._dict.items()
+            if document.metadata.get(SOURCE_KEY) == source_name
+        ]
+        if not ids_to_delete:
+            return
+
+        if len(ids_to_delete) == len(self._store.docstore._dict):
+            self._store = None
+            return
+
+        self._store.delete(ids_to_delete)
 
     # ── Searching it ──────────────────────────────────────────────────────────
 

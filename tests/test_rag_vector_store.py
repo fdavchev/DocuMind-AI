@@ -67,6 +67,66 @@ def test_add_to_an_empty_store_builds_it(store):
     assert store.sources == ("finance.pdf",)
 
 
+# ── Removing one document ─────────────────────────────────────────────────────
+
+def test_remove_drops_the_file_from_sources(store):
+    store.build(_chunks(FINANCE, SAFETY))
+
+    store.remove("finance.pdf")
+
+    assert store.sources == ("safety.pdf",)
+
+
+def test_remove_leaves_the_other_file_searchable(store):
+    store.build(_chunks(FINANCE, SAFETY))
+
+    store.remove("finance.pdf")
+    hits = store.search("budget forecast quarter", k=4)
+
+    assert [hit.source_document for hit in hits] == ["safety.pdf"]
+
+
+def test_remove_takes_every_chunk_of_that_file(store):
+    store.build(_many("a.pdf", 5) + _many("b.pdf", 3))
+
+    store.remove("a.pdf")
+
+    assert store.sources == ("b.pdf",)
+    assert len(store.search("text", k=10)) == 3
+
+
+def test_removing_the_only_file_leaves_the_store_not_ready(store):
+    store.build(_chunks(FINANCE))
+
+    store.remove("finance.pdf")
+
+    assert store.is_ready is False
+    assert store.sources == ()
+
+
+def test_a_store_emptied_by_remove_can_be_added_to_again(store):
+    store.build(_chunks(FINANCE))
+    store.remove("finance.pdf")
+
+    store.add(_chunks(SAFETY))
+
+    assert store.sources == ("safety.pdf",)
+
+
+def test_removing_a_file_that_is_not_indexed_changes_nothing(store):
+    store.build(_chunks(FINANCE))
+
+    store.remove("never-uploaded.pdf")
+
+    assert store.sources == ("finance.pdf",)
+
+
+def test_removing_from_an_empty_store_changes_nothing(store):
+    store.remove("finance.pdf")
+
+    assert store.is_ready is False
+
+
 # ── Searching returns Chunks, not library objects ─────────────────────────────
 
 def test_search_returns_chunk_objects(store):

@@ -169,6 +169,14 @@ if "pipeline" not in st.session_state:
 if "pdf_chat_history" not in st.session_state:
     # each entry: {"role": ..., "content": ..., "sources": <markdown or None>}
     st.session_state.pdf_chat_history = []
+if "pdf_uploader_names" not in st.session_state:
+    # The filenames the PDF uploader held on the last run that drew it. A name
+    # that was here and is gone now is a file the user deselected.
+    st.session_state.pdf_uploader_names = set()
+if "pdf_uploader_key" not in st.session_state:
+    # Part of the PDF uploader's widget key. A file_uploader keeps its files
+    # until its key changes, so bumping this is how the uploader gets emptied.
+    st.session_state.pdf_uploader_key = 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -246,6 +254,11 @@ if mode == CHAT_MODE:
     for message in st.session_state.chat_session.messages:
         render_chat_message(message)
 
+    # Streamlit discards a widget's state on any run that does not draw it, so
+    # the PDF uploader comes back empty after a visit to this mode. Forgetting
+    # what it held keeps that from reading as the user deselecting every file.
+    st.session_state.pdf_uploader_names = set()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PDF Q&A MODE — RAG pipeline
@@ -265,7 +278,25 @@ else:
             type=["pdf"],
             accept_multiple_files=True,
             help="Your files never leave your machine. Upload several to ask across all of them.",
+            key=f"pdf_uploader_{st.session_state.pdf_uploader_key}",
         )
+
+        # A file removed with the uploader's own "x" leaves the index too. Only
+        # names the uploader held last run count, so an indexed file the
+        # uploader never showed (after a mode switch emptied it) is kept.
+        uploaded_names = {pdf.name for pdf in uploaded_pdfs}
+        removed_files = [
+            name for name in st.session_state.vector_store.sources
+            if name in st.session_state.pdf_uploader_names
+            and name not in uploaded_names
+        ]
+        st.session_state.pdf_uploader_names = uploaded_names
+
+        if removed_files:
+            for name in removed_files:
+                st.session_state.vector_store.remove(name)
+            # The count in the expander's title was drawn before this ran.
+            st.rerun()
 
         if uploaded_pdfs:
             new_files = [
@@ -313,6 +344,10 @@ else:
                     st.session_state.vector_store, st.session_state.provider
                 )
                 st.session_state.pdf_chat_history = []
+                # Without a new key the uploader would still hold the cleared
+                # files, and the next run would index them all over again.
+                st.session_state.pdf_uploader_key += 1
+                st.session_state.pdf_uploader_names = set()
                 st.rerun()
 
     if not st.session_state.pdf_chat_history:
@@ -367,6 +402,10 @@ if prompt and mode == CHAT_MODE:
     # clean so the user can simply retry.
     if response:
         session.add_assistant(response)
+        # The sidebar's Save chat button was drawn at the top of this run,
+        # before the turn existed. Rerunning redraws it with the turn included,
+        # instead of leaving it one message behind until the next interaction.
+        st.rerun()
 
 elif prompt:
     with st.chat_message("user", avatar=USER_AVATAR):
