@@ -4,6 +4,17 @@
 #   🤖 Chat    — image + text chat
 #   📄 PDF Q&A — RAG pipeline for document question-answering
 #
+# WHAT IS LEFT IN THIS FILE:
+# Widgets, and the objects they talk to. The pipeline is assembled once at
+# startup — an AppConfig, a LoaderFactory, a TextSplitter, a VectorStore, an
+# OllamaProvider, and the RagPipeline that orchestrates them — and every line
+# below is either a Streamlit call or a method call on one of those objects.
+# Nothing here knows how a PDF is read, how its text is chunked, how a vector is
+# searched or how a prompt is written: that knowledge lives in documind/, which
+# is why this file no longer names a PDF parser, FAISS, LangChain or Ollama
+# anywhere. Uploading is one call (`ingest`), asking is one call (`ask`), and the
+# UI's job is to render what comes back.
+#
 # WHY A MODE SELECTOR INSTEAD OF st.tabs:
 # Streamlit only pins st.chat_input to the bottom of the viewport when the
 # widget is a top-level element — see streamlit/elements/widgets/chat.py, which
@@ -18,26 +29,22 @@ from datetime import datetime
 import streamlit as st
 
 from config import (
-    APP_TITLE, APP_ICON,
     USER_AVATAR, ASSISTANT_AVATAR,
-    AVAILABLE_MODELS, DEFAULT_MODEL,
     CHAT_MODE, PDF_MODE,
 )
-from chat_history import init_memory, add_message, get_history, clear_history, export_history
-from llm_chain import build_llm, stream_response, stream_vision_response
-
-# Imports for the PDF Q&A mode (RAG with source citations)
-from pdf_handler import load_pdf_as_documents, scanned_page_count
-from vector_store import build_vector_store, add_documents, retrieve_relevant_documents
-from rag_chain import stream_rag_answer_from_documents, format_sources_markdown
+from documind.chat import ChatSession, Message
+from documind.config import AppConfig
+from documind.documents import LoaderFactory, TextSplitter
+from documind.llm import OllamaProvider
+from documind.rag import RagPipeline, VectorStore
 
 # User-readable failures instead of tracebacks (Ollama down, model missing,
-# oversized or corrupt PDF)
+# oversized or corrupt PDF). Every step of the pipeline raises from this one
+# hierarchy, so there is a single way to handle a failure here: render it.
 from errors import (
     CHAT_MODELS,
     PDF_MODELS,
     guarded_stream,
-    no_text_error,
     ocr_status,
     readiness,
     translate,
@@ -47,6 +54,26 @@ from errors import (
 # One readiness check covering everything the app needs, so the user sees a
 # single verdict rather than one panel per mode.
 REQUIRED_MODELS = list(dict.fromkeys(CHAT_MODELS + PDF_MODELS))
+
+# Built once here and handed to every object below, so no module has to look up
+# a global to find out how it should behave.
+config = AppConfig()
+
+
+def build_pipeline(vector_store: VectorStore, provider: OllamaProvider) -> RagPipeline:
+    """
+    The document pipeline, assembled from the four objects it delegates to.
+
+    The store is passed in rather than created here because it outlives the
+    pipeline: switching the model in the sidebar builds a new provider, and the
+    pipeline is rebuilt around it without re-indexing anything.
+    """
+    return RagPipeline(
+        loader_factory=LoaderFactory(config),
+        splitter=TextSplitter(config),
+        vector_store=vector_store,
+        provider=provider,
+    )
 
 
 def show_error(exc: Exception, filename: str | None = None) -> None:
@@ -82,8 +109,15 @@ def render_status_panel() -> None:
             st.rerun()
 
 
-def render_message(msg: dict) -> None:
-    """One chat bubble, with its Sources panel when the message has citations."""
+def render_chat_message(message: Message) -> None:
+    """One bubble of the Chat-mode conversation."""
+    avatar = USER_AVATAR if message.role == "user" else ASSISTANT_AVATAR
+    with st.chat_message(message.role, avatar=avatar):
+        st.markdown(message.content)
+
+
+def render_pdf_message(msg: dict) -> None:
+    """One PDF Q&A bubble, with its Sources panel when the answer has citations."""
     avatar = USER_AVATAR if msg["role"] == "user" else ASSISTANT_AVATAR
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
@@ -93,7 +127,9 @@ def render_message(msg: dict) -> None:
 
 
 # ── Page config ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title=APP_TITLE, page_icon=APP_ICON, layout="centered")
+st.set_page_config(
+    page_title=config.app_title, page_icon=config.app_icon, layout="centered"
+)
 
 # Light styling only — spacing and emphasis. No hardcoded colours, so the app
 # still looks right in both Streamlit's light and dark themes.
@@ -112,24 +148,35 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title(f"{APP_ICON} {APP_TITLE}")
+st.title(f"{config.app_icon} {config.app_title}")
 
 # ── Session state ──────────────────────────────────────────────────────────────
-if "history" not in st.session_state:
-    st.session_state.history = init_memory()
+# Streamlit re-runs this script on every interaction, so anything that has to
+# remember something between runs is built once and kept here.
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = ChatSession(system_prompt=config.system_prompt)
 if "selected_model" not in st.session_state:
-    st.session_state.selected_model = DEFAULT_MODEL
-if "llm" not in st.session_state:
-    st.session_state.llm = build_llm(st.session_state.selected_model)
-if "export_snapshot" not in st.session_state:
-    st.session_state.export_snapshot = ""
-if "pdf_vector_store" not in st.session_state:
-    st.session_state.pdf_vector_store = None
-if "pdf_filenames" not in st.session_state:
-    st.session_state.pdf_filenames = []
+    st.session_state.selected_model = config.default_model
+if "provider" not in st.session_state:
+    st.session_state.provider = OllamaProvider(config, st.session_state.selected_model)
+if "vector_store" not in st.session_state:
+    # Empty until the first upload; building it reaches for no model.
+    st.session_state.vector_store = VectorStore(config)
+if "pipeline" not in st.session_state:
+    st.session_state.pipeline = build_pipeline(
+        st.session_state.vector_store, st.session_state.provider
+    )
 if "pdf_chat_history" not in st.session_state:
     # each entry: {"role": ..., "content": ..., "sources": <markdown or None>}
     st.session_state.pdf_chat_history = []
+if "pdf_uploader_names" not in st.session_state:
+    # The filenames the PDF uploader held on the last run that drew it. A name
+    # that was here and is gone now is a file the user deselected.
+    st.session_state.pdf_uploader_names = set()
+if "pdf_uploader_key" not in st.session_state:
+    # Part of the PDF uploader's widget key. A file_uploader keeps its files
+    # until its key changes, so bumping this is how the uploader gets emptied.
+    st.session_state.pdf_uploader_key = 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -143,14 +190,19 @@ with st.sidebar:
     st.markdown("**Chat model**")
     chosen_model = st.selectbox(
         label="Choose a model",
-        options=AVAILABLE_MODELS,
-        index=AVAILABLE_MODELS.index(st.session_state.selected_model),
+        options=config.available_models,
+        index=config.available_models.index(st.session_state.selected_model),
         label_visibility="collapsed",
         help="Used by Chat mode. PDF answers always use llama3.",
     )
     if chosen_model != st.session_state.selected_model:
         st.session_state.selected_model = chosen_model
-        st.session_state.llm = build_llm(chosen_model)
+        st.session_state.provider = OllamaProvider(config, chosen_model)
+        # The pipeline holds a provider too; rebuilding it around the same index
+        # keeps the two from disagreeing about which model is selected.
+        st.session_state.pipeline = build_pipeline(
+            st.session_state.vector_store, st.session_state.provider
+        )
         st.toast(f"Switched to **{chosen_model}**", icon="🔄")
 
     st.markdown("**🖼️ Image input**")
@@ -164,14 +216,13 @@ with st.sidebar:
 
     st.markdown("---")
     if st.button("🗑️ Clear chat", use_container_width=True):
-        st.session_state.history = clear_history(st.session_state.history)
-        st.session_state.export_snapshot = ""
+        st.session_state.chat_session.clear()
         st.rerun()
 
-    has_history = bool(st.session_state.history)
+    has_history = not st.session_state.chat_session.is_empty
     st.download_button(
         label="💾 Save chat",
-        data=st.session_state.export_snapshot if has_history else "",
+        data=st.session_state.chat_session.export() if has_history else "",
         file_name=f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
         mime="text/plain",
         use_container_width=True,
@@ -197,18 +248,24 @@ mode = mode or CHAT_MODE
 # CHAT MODE — image + text
 # ══════════════════════════════════════════════════════════════════════════════
 if mode == CHAT_MODE:
-    if not st.session_state.history:
+    if st.session_state.chat_session.is_empty:
         st.caption("Ask anything, or upload an image in the sidebar to talk about it.")
 
-    for msg in get_history(st.session_state.history):
-        render_message(msg)
+    for message in st.session_state.chat_session.messages:
+        render_chat_message(message)
+
+    # Streamlit discards a widget's state on any run that does not draw it, so
+    # the PDF uploader comes back empty after a visit to this mode. Forgetting
+    # what it held keeps that from reading as the user deselecting every file.
+    st.session_state.pdf_uploader_names = set()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PDF Q&A MODE — RAG pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 else:
-    indexed = st.session_state.pdf_filenames
+    # The store knows which files it holds, so the UI doesn't keep its own list.
+    indexed = st.session_state.vector_store.sources
 
     # Setup collapses once documents are loaded, so the conversation gets the
     # space instead of the upload widget.
@@ -221,53 +278,76 @@ else:
             type=["pdf"],
             accept_multiple_files=True,
             help="Your files never leave your machine. Upload several to ask across all of them.",
+            key=f"pdf_uploader_{st.session_state.pdf_uploader_key}",
         )
+
+        # A file removed with the uploader's own "x" leaves the index too. Only
+        # names the uploader held last run count, so an indexed file the
+        # uploader never showed (after a mode switch emptied it) is kept.
+        uploaded_names = {pdf.name for pdf in uploaded_pdfs}
+        removed_files = [
+            name for name in st.session_state.vector_store.sources
+            if name in st.session_state.pdf_uploader_names
+            and name not in uploaded_names
+        ]
+        st.session_state.pdf_uploader_names = uploaded_names
+
+        if removed_files:
+            for name in removed_files:
+                st.session_state.vector_store.remove(name)
+            # The count in the expander's title was drawn before this ran.
+            st.rerun()
 
         if uploaded_pdfs:
             new_files = [
                 pdf for pdf in uploaded_pdfs
-                if pdf.name not in st.session_state.pdf_filenames
+                if pdf.name not in st.session_state.vector_store.sources
             ]
 
             for pdf in new_files:
                 try:
                     with st.spinner(f"Reading and indexing **{pdf.name}**... (~10-30 seconds)"):
-                        # Step 0: refuse files too large to index in reasonable time
+                        # Refuse files too large to index in reasonable time,
+                        # before any of them is parsed.
                         validate_pdf_upload(pdf)
 
-                        # Step 1 + 2: extract per-page text and chunk it, keeping
-                        # {"source": filename, "page": n} on every chunk
-                        documents = load_pdf_as_documents(pdf)
-
-                        if not documents:
-                            # Distinguish "scanned, and we can't OCR it" from
-                            # "genuinely empty" — different problems, different fixes.
-                            raise no_text_error(pdf.name, scanned_page_count(pdf))
-
-                        # Step 3: embed the chunks — into a new index, or into the
-                        # existing one so several PDFs are searchable together
-                        if st.session_state.pdf_vector_store is None:
-                            st.session_state.pdf_vector_store = build_vector_store(documents)
-                        else:
-                            add_documents(st.session_state.pdf_vector_store, documents)
-
-                        st.session_state.pdf_filenames.append(pdf.name)
+                        # Read, chunk, embed and index — one call, because the
+                        # order of those steps is the pipeline's business.
+                        report = st.session_state.pipeline.ingest(pdf)
                 except Exception as exc:
                     # One bad file must not stop the rest of the batch indexing.
                     show_error(exc, pdf.name)
                     continue
 
-                st.success(f"✅ **{pdf.name}** indexed — {len(documents)} chunks created.")
+                ocr_note = (
+                    f" {report.ocr_page_count} page(s) needed OCR."
+                    if report.used_ocr
+                    else ""
+                )
+                st.success(
+                    f"✅ **{report.document_name}** indexed — {report.page_count} "
+                    f"page(s), {report.chunk_count} chunks in "
+                    f"{report.elapsed_seconds:.1f}s.{ocr_note}"
+                )
 
-        if st.session_state.pdf_filenames:
+        if st.session_state.vector_store.is_ready:
             st.markdown(
                 "**Answering from:** "
-                + " · ".join(f"`{name}`" for name in st.session_state.pdf_filenames)
+                + " · ".join(
+                    f"`{name}`" for name in st.session_state.vector_store.sources
+                )
             )
             if st.button("🗑️ Clear documents & chat", use_container_width=True):
-                st.session_state.pdf_vector_store = None
-                st.session_state.pdf_filenames = []
+                # A fresh index, and a pipeline pointed at it.
+                st.session_state.vector_store = VectorStore(config)
+                st.session_state.pipeline = build_pipeline(
+                    st.session_state.vector_store, st.session_state.provider
+                )
                 st.session_state.pdf_chat_history = []
+                # Without a new key the uploader would still hold the cleared
+                # files, and the next run would index them all over again.
+                st.session_state.pdf_uploader_key += 1
+                st.session_state.pdf_uploader_names = set()
                 st.rerun()
 
     if not st.session_state.pdf_chat_history:
@@ -277,13 +357,13 @@ else:
         )
 
     for msg in st.session_state.pdf_chat_history:
-        render_message(msg)
+        render_pdf_message(msg)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # THE INPUT — top level on purpose, which is what pins it to the viewport
 # ══════════════════════════════════════════════════════════════════════════════
-awaiting_pdf = mode == PDF_MODE and st.session_state.pdf_vector_store is None
+awaiting_pdf = mode == PDF_MODE and not st.session_state.vector_store.is_ready
 
 if awaiting_pdf:
     placeholder = "Upload a PDF above to start asking questions..."
@@ -295,25 +375,24 @@ else:
 prompt = st.chat_input(placeholder, disabled=awaiting_pdf)
 
 if prompt and mode == CHAT_MODE:
+    session = st.session_state.chat_session
+
     with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(prompt)
-    st.session_state.history = add_message(st.session_state.history, "user", prompt)
+    session.add_user(prompt)
 
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         try:
+            provider = st.session_state.provider
             if uploaded_image:
                 response = st.write_stream(
                     guarded_stream(
-                        stream_vision_response(
-                            uploaded_image.getvalue(), prompt, model_name="llava"
-                        )
+                        provider.stream_vision(uploaded_image.getvalue(), prompt)
                     )
                 )
             else:
                 response = st.write_stream(
-                    guarded_stream(
-                        stream_response(st.session_state.llm, st.session_state.history)
-                    )
+                    guarded_stream(provider.stream_chat(session.messages))
                 )
         except Exception as exc:
             show_error(exc)
@@ -322,10 +401,11 @@ if prompt and mode == CHAT_MODE:
     # Only record an answer we actually got — a failed turn leaves the history
     # clean so the user can simply retry.
     if response:
-        st.session_state.history = add_message(
-            st.session_state.history, "assistant", response
-        )
-        st.session_state.export_snapshot = export_history(st.session_state.history)
+        session.add_assistant(response)
+        # The sidebar's Save chat button was drawn at the top of this run,
+        # before the turn existed. Rerunning redraws it with the turn included,
+        # instead of leaving it one message behind until the next interaction.
+        st.rerun()
 
 elif prompt:
     with st.chat_message("user", avatar=USER_AVATAR):
@@ -334,22 +414,20 @@ elif prompt:
         {"role": "user", "content": prompt, "sources": None}
     )
 
-    # Retrieve relevant chunks from FAISS. With several PDFs indexed we widen
-    # the window so one long document can't crowd the others out. Embedding the
-    # question needs Ollama, so retrieval can fail too.
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         response, sources_markdown = None, None
         try:
-            k = 4 if len(st.session_state.pdf_filenames) <= 1 else 6
-            docs = retrieve_relevant_documents(
-                st.session_state.pdf_vector_store, prompt, k=k
-            )
-            sources_markdown = format_sources_markdown(docs)
+            pipeline = st.session_state.pipeline
+
+            # Retrieval and prompt building happen inside ask(), before the first
+            # token — so embedding the question can fail here, where the error is
+            # shown, rather than halfway through the answer. By the time this
+            # returns, the passages behind the answer are already known.
+            answer = pipeline.ask(prompt)
+            sources_markdown = pipeline.format_sources_markdown()
 
             # Stream the answer, then show the passages it was given
-            response = st.write_stream(
-                guarded_stream(stream_rag_answer_from_documents(docs, prompt))
-            )
+            response = st.write_stream(guarded_stream(answer))
             with st.expander("📚 Sources"):
                 st.markdown(sources_markdown)
         except Exception as exc:

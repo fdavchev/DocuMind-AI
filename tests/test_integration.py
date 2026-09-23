@@ -1,41 +1,56 @@
 """
 End-to-end: PDF bytes → chunks → FAISS → retrieval → prompt → streamed answer.
 
-Both external dependencies are stubbed (embeddings are the deterministic
-FakeEmbeddings, Ollama is a canned token stream), so this runs in CI with no
-model pulled and no server running.
+This is the whole stack the app runs on, assembled exactly as `app.py` assembles
+it — a real LoaderFactory, TextSplitter, VectorStore and OllamaProvider behind a
+RagPipeline. Both external dependencies are stubbed (embeddings are the
+deterministic FakeEmbeddings, Ollama is a canned token stream), so this runs in
+CI with no model pulled and no server running. Unlike `test_rag_pipeline.py`,
+which swaps in a FakeProvider, the provider here is the real one: the prompt
+asserted below is the prompt Ollama would have received.
 """
 
 import pytest
-from langchain_core.documents import Document
 
-import rag_chain
-from pdf_handler import load_pdf_as_documents
-from rag_chain import (
-    format_sources_markdown,
-    stream_rag_answer_from_documents,
-)
-from vector_store import add_documents, build_vector_store, retrieve_relevant_documents
+from documind.config import AppConfig
+from documind.documents.loader_factory import LoaderFactory
+from documind.documents.text_splitter import TextSplitter
+from documind.llm import ollama_provider
+from documind.llm.ollama_provider import OllamaProvider
+from documind.rag.rag_pipeline import RagPipeline
+from documind.rag.vector_store import VectorStore
 
 
 class RecordingOllama:
     def __init__(self):
         self.prompt = None
 
-    def __call__(self, model, messages, stream):
-        self.prompt = messages[0]["content"]
+    def __call__(self, **kwargs):
+        self.prompt = kwargs["messages"][0]["content"]
         return iter([{"message": {"content": "The deadline is March 1 [1]."}}])
 
 
 @pytest.fixture
 def recorded_ollama(monkeypatch):
     fake = RecordingOllama()
-    monkeypatch.setattr(rag_chain.ollama, "chat", fake)
+    monkeypatch.setattr(ollama_provider.ollama, "chat", fake)
     return fake
 
 
+@pytest.fixture
+def pipeline(fake_embeddings):
+    """The same object graph app.py builds at startup."""
+    config = AppConfig()
+    return RagPipeline(
+        loader_factory=LoaderFactory(config),
+        splitter=TextSplitter(config),
+        vector_store=VectorStore(config, embeddings=fake_embeddings),
+        provider=OllamaProvider(config),
+    )
+
+
 def test_full_pipeline_cites_the_right_file_and_page(
-    make_pdf, fake_embeddings, recorded_ollama
+    pipeline, make_pdf, recorded_ollama
 ):
     handbook = make_pdf(
         [
@@ -45,53 +60,48 @@ def test_full_pipeline_cites_the_right_file_and_page(
         ],
         name="handbook.pdf",
     )
-    finance = make_pdf(
-        ["the budget forecast for the quarter"], name="finance.pdf"
-    )
+    finance = make_pdf(["the budget forecast for the quarter"], name="finance.pdf")
 
     # Index both PDFs into one store — the multi-document path.
-    store = build_vector_store(load_pdf_as_documents(handbook), embeddings=fake_embeddings)
-    add_documents(store, load_pdf_as_documents(finance))
+    pipeline.ingest(handbook)
+    pipeline.ingest(finance)
 
-    docs = retrieve_relevant_documents(store, "submission deadline March first", k=1)
-    answer = "".join(stream_rag_answer_from_documents(docs, "When is the deadline?"))
+    answer = "".join(pipeline.ask("When is the deadline?"))
 
     # The retrieved passage came from the right page of the right file …
-    assert docs[0].metadata == {"source": "handbook.pdf", "page": 3}
+    assert pipeline.last_sources[0].source_document == "handbook.pdf"
+    assert pipeline.last_sources[0].page_number == 3
     # … the prompt showed the model that provenance …
     assert "[1] handbook.pdf, p. 3" in recorded_ollama.prompt
     assert "When is the deadline?" in recorded_ollama.prompt
     # … and the UI can show the user the same passage list.
-    assert "[1] handbook.pdf, p. 3" in format_sources_markdown(docs)
+    assert "[1] handbook.pdf, p. 3" in pipeline.format_sources_markdown()
     assert answer == "The deadline is March 1 [1]."
 
 
 def test_question_about_the_second_document_retrieves_from_it(
-    make_pdf, fake_embeddings, recorded_ollama
+    pipeline, make_pdf, recorded_ollama
 ):
-    handbook = make_pdf(["the submission deadline is March first"], name="handbook.pdf")
-    finance = make_pdf(
-        ["intro", "the budget forecast for the quarter"], name="finance.pdf"
+    pipeline.ingest(
+        make_pdf(["the submission deadline is March first"], name="handbook.pdf")
+    )
+    pipeline.ingest(
+        make_pdf(["intro", "the budget forecast for the quarter"], name="finance.pdf")
     )
 
-    store = build_vector_store(load_pdf_as_documents(handbook), embeddings=fake_embeddings)
-    add_documents(store, load_pdf_as_documents(finance))
+    list(pipeline.ask("budget forecast quarter"))
 
-    docs = retrieve_relevant_documents(store, "budget forecast quarter", k=1)
-    list(stream_rag_answer_from_documents(docs, "What is the forecast?"))
-
-    assert docs[0].metadata == {"source": "finance.pdf", "page": 2}
+    assert pipeline.last_sources[0].source_document == "finance.pdf"
+    assert pipeline.last_sources[0].page_number == 2
     assert "[1] finance.pdf, p. 2" in recorded_ollama.prompt
 
 
-def test_prompt_never_invents_a_passage_marker(fake_embeddings, recorded_ollama):
-    store = build_vector_store(
-        [Document(page_content="only passage", metadata={"source": "a.pdf", "page": 1})],
-        embeddings=fake_embeddings,
-    )
+def test_prompt_never_invents_a_passage_marker(pipeline, make_pdf, recorded_ollama):
+    # One passage indexed, four retrieval slots — the prompt must number only
+    # what actually came back.
+    pipeline.ingest(make_pdf(["only passage"], name="a.pdf"))
 
-    docs = retrieve_relevant_documents(store, "only passage", k=4)
-    list(stream_rag_answer_from_documents(docs, "What is here?"))
+    list(pipeline.ask("What is here?"))
 
     context_section = recorded_ollama.prompt.split("CONTEXT:")[1].split("QUESTION:")[0]
     assert "[1]" in context_section

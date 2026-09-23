@@ -14,8 +14,11 @@ machine: the app must come up cleanly when Ollama is not running at all.
 import pytest
 from streamlit.testing.v1 import AppTest
 
+import documind.rag.vector_store
 import errors
 from config import CHAT_MODE, PDF_MODE
+from conftest import FakeEmbeddings, build_pdf_bytes
+from documind.llm import OllamaProvider
 
 APP = str((__import__("pathlib").Path(__file__).resolve().parent.parent / "app.py"))
 
@@ -180,3 +183,104 @@ def test_the_input_is_top_level_so_streamlit_pins_it(monkeypatch, app_with_ollam
         "it inline and it will scroll away"
     )
     assert captured["root"] == st._main._root_container
+
+
+# ── Sidebar and document list stay in step with what just happened ────────────
+
+def test_save_chat_includes_the_turn_that_was_just_sent(monkeypatch, app_with_ollama_ready):
+    """
+    The sidebar draws the Save chat button before the chat turn at the bottom
+    of the script runs. Without a rerun after the answer, the export lagged one
+    turn behind: the first message only appeared after a second was sent.
+    """
+    import streamlit as st
+
+    monkeypatch.setattr(
+        OllamaProvider, "stream_chat", lambda self, messages: iter(["Hello ", "there"])
+    )
+    exports = []
+    real_download_button = st.download_button
+
+    def spy(*args, **kwargs):
+        exports.append(kwargs["data"])
+        return real_download_button(*args, **kwargs)
+
+    monkeypatch.setattr(st, "download_button", spy)
+
+    at = app_with_ollama_ready.run()
+    at = at.chat_input[0].set_value("what is FAISS?").run()
+
+    assert not at.exception
+    assert "what is FAISS?" in exports[-1]
+    assert "Hello there" in exports[-1]
+
+
+def _pdf(name: str, text: str) -> tuple[str, bytes, str]:
+    return (name, build_pdf_bytes([text]), "application/pdf")
+
+
+FINANCE_PDF = _pdf("finance.pdf", "the budget forecast for the quarter")
+SAFETY_PDF = _pdf("safety.pdf", "the safety procedures for the lab")
+
+
+@pytest.fixture
+def pdf_mode_app(monkeypatch, app_with_ollama_ready):
+    # Real indexing, with the offline embedding model in place of Ollama's.
+    monkeypatch.setattr(
+        documind.rag.vector_store, "OllamaEmbeddings", lambda **kwargs: FakeEmbeddings()
+    )
+    at = app_with_ollama_ready.run()
+    return at.segmented_control[0].set_value(PDF_MODE).run()
+
+
+def test_deselecting_a_pdf_removes_it_from_the_index(pdf_mode_app):
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF, SAFETY_PDF]).run()
+    assert at.session_state.vector_store.sources == ("finance.pdf", "safety.pdf")
+
+    # The uploader's own "x" on finance.pdf leaves only safety.pdf in the widget.
+    at = at.file_uploader[0].set_value([SAFETY_PDF]).run()
+
+    assert not at.exception
+    assert at.session_state.vector_store.sources == ("safety.pdf",)
+    assert any("1 indexed" in expander.label for expander in at.expander)
+
+
+def test_deselecting_the_last_pdf_empties_the_index_but_keeps_the_chat(pdf_mode_app):
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF]).run()
+    at.session_state.pdf_chat_history = [
+        {"role": "user", "content": "earlier question", "sources": None}
+    ]
+
+    at = at.file_uploader[0].set_value(None).run()
+
+    assert not at.exception
+    assert at.session_state.vector_store.is_ready is False
+    assert len(at.session_state.pdf_chat_history) == 1
+
+
+def test_a_mode_switch_does_not_read_as_deselecting_every_pdf(pdf_mode_app):
+    # Streamlit empties the uploader when chat mode stops drawing it; the
+    # indexed documents must survive that.
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF]).run()
+
+    at = at.segmented_control[0].set_value(CHAT_MODE).run()
+    at = at.segmented_control[0].set_value(PDF_MODE).run()
+
+    assert not at.exception
+    assert at.session_state.vector_store.sources == ("finance.pdf",)
+
+
+def test_clearing_documents_empties_the_uploader_so_nothing_is_reindexed(pdf_mode_app):
+    # The uploader kept the cleared files selected, so the rerun after Clear
+    # saw them as new and indexed them all over again.
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF]).run()
+    assert at.session_state.vector_store.sources == ("finance.pdf",)
+
+    clear_button = next(b for b in at.button if "Clear documents" in b.label)
+    at = clear_button.click().run()
+    at = at.run()
+
+    assert not at.exception
+    assert at.session_state.vector_store.sources == ()
+    assert at.session_state.vector_store.is_ready is False
+    assert not at.file_uploader[0].value

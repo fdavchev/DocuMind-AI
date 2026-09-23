@@ -113,6 +113,48 @@ class NoTextInPdf(FriendlyError):
         )
 
 
+class EmptyDocumentError(FriendlyError):
+    """A file was read successfully and contained no text worth keeping."""
+
+    def __init__(self, filename: str):
+        super().__init__(
+            f"**Nothing could be read from {filename}.** Every page came back "
+            "empty.",
+            "If it is a scanned document, OCR has to be available to read it — "
+            "otherwise check the file actually contains text.",
+        )
+        self.filename = filename
+
+
+class UnsupportedFileError(FriendlyError):
+    """The file type isn't one any loader in the project can read."""
+
+    def __init__(self, filename: str, supported: tuple[str, ...] = ()):
+        readable = ", ".join(f"`{extension}`" for extension in supported)
+        hint = (
+            f"Supported formats: {readable}."
+            if readable
+            else "Convert it to PDF or plain text and upload it again."
+        )
+        super().__init__(
+            f"**{filename} isn't a file type this app can read.**",
+            hint,
+        )
+        self.filename = filename
+        self.supported = tuple(supported)
+
+
+class NoDocumentsIndexed(FriendlyError):
+    """A question was asked before anything had been uploaded and indexed."""
+
+    def __init__(self):
+        super().__init__(
+            "**There is nothing to search yet.** No document has been uploaded "
+            "and indexed in this session.",
+            "Upload a PDF above, wait for it to finish indexing, then ask again.",
+        )
+
+
 class OcrUnavailable(FriendlyError):
     """A scanned PDF was detected, but Tesseract isn't installed to read it."""
 
@@ -128,13 +170,13 @@ class OcrUnavailable(FriendlyError):
 class ScannedPdfTooLong(FriendlyError):
     """OCR would work, but the document is long enough that it isn't worth it."""
 
-    def __init__(self, filename: str, scanned_pages: int):
+    def __init__(self, filename: str, scanned_pages: int, limit: int):
         super().__init__(
             f"**{filename} needs OCR on {scanned_pages} pages**, over the "
-            f"{ocr.MAX_OCR_PAGES}-page limit. Reading that many scanned pages "
+            f"{limit}-page limit. Reading that many scanned pages "
             "would take several minutes.",
-            "Split it into smaller PDFs, or raise `MAX_OCR_PAGES` in `ocr.py` "
-            "if you're willing to wait.",
+            "Split it into smaller PDFs, or raise `max_ocr_pages` in "
+            "`documind/config.py` if you're willing to wait.",
         )
 
 

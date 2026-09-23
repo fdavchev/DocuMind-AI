@@ -11,14 +11,17 @@ OCR is refused rather than started.
 import pytest
 
 import ocr
+from documind.config import AppConfig
+from documind.documents.pdf_loader import PdfLoader
+from documind.documents.text_splitter import TextSplitter
 from errors import (
+    EmptyDocumentError,
     NoTextInPdf,
     OcrUnavailable,
     ScannedPdfTooLong,
     no_text_error,
     ocr_status,
 )
-from pdf_handler import extract_pages_from_pdf, load_pdf_as_documents, scanned_page_count
 
 
 # Captured at import time, before the autouse fixture replaces them with stubs.
@@ -58,7 +61,7 @@ def test_the_threshold_is_the_documented_one():
 def test_scanned_page_count_counts_only_pages_without_a_text_layer(make_pdf):
     pdf = make_pdf(["a page with a proper text layer on it", "", "- 3 -"])
 
-    assert scanned_page_count(pdf) == 2
+    assert PdfLoader(AppConfig()).scanned_page_count(pdf) == 2
 
 
 # ── Degrading without Tesseract ────────────────────────────────────────────────
@@ -103,20 +106,30 @@ def test_a_scanned_page_is_recovered_by_ocr(make_pdf, ocr_enabled):
     # Page 2 has no text layer, standing in for a scanned page.
     pdf = make_pdf(["a page with a proper text layer on it", ""])
 
-    pages = dict(extract_pages_from_pdf(pdf))
+    document = PdfLoader(AppConfig()).load(pdf)
+    pages = {page.number: page for page in document.pages}
 
-    assert pages[2] == "text recovered by OCR"
+    assert pages[2].text == "text recovered by OCR"
+
+
+def test_a_page_records_that_it_was_read_by_ocr(make_pdf, ocr_enabled):
+    pdf = make_pdf(["a page with a proper text layer on it", ""])
+
+    document = PdfLoader(AppConfig()).load(pdf, name="scan.pdf")
+
+    assert [page.used_ocr for page in document.pages] == [False, True]
+    assert document.ocr_page_count == 1
 
 
 def test_ocr_recovered_text_keeps_its_page_number(make_pdf, ocr_enabled):
+    config = AppConfig()
     pdf = make_pdf(["a page with a proper text layer on it", "", ""])
 
-    documents = load_pdf_as_documents(pdf, source="scan.pdf")
+    document = PdfLoader(config).load(pdf, name="scan.pdf")
+    chunks = TextSplitter(config).split(document)
 
     ocr_pages = {
-        doc.metadata["page"]
-        for doc in documents
-        if "recovered by OCR" in doc.page_content
+        chunk.page_number for chunk in chunks if "recovered by OCR" in chunk.text
     }
     assert ocr_pages == {2, 3}
 
@@ -133,44 +146,47 @@ def test_pages_with_a_text_layer_are_not_sent_to_ocr(make_pdf, monkeypatch):
     monkeypatch.setattr(ocr, "ocr_page", spy)
     pdf = make_pdf(["a page with a proper text layer on it"])
 
-    pages = extract_pages_from_pdf(pdf)
+    pages = PdfLoader(AppConfig()).load(pdf).pages
 
     assert calls == []
-    assert "proper text layer" in pages[0][1]
+    assert "proper text layer" in pages[0].text
+    assert not pages[0].used_ocr
 
 
 def test_use_ocr_false_forces_the_text_layer_only_path(make_pdf, ocr_enabled):
     pdf = make_pdf(["a page with a proper text layer on it", ""])
 
-    pages = extract_pages_from_pdf(pdf, use_ocr=False)
+    pages = PdfLoader(AppConfig(), use_ocr=False).load(pdf).pages
 
-    assert [number for number, _ in pages] == [1]
+    assert [page.number for page in pages] == [1]
 
 
 def test_a_fully_scanned_pdf_yields_nothing_without_ocr(make_pdf):
-    # The autouse fixture keeps OCR off, so this is the no-Tesseract machine.
-    pdf = make_pdf(["", ""])
+    # The autouse fixture keeps OCR off, so this is the no-Tesseract machine:
+    # nothing can be read, and the upload is refused rather than indexed empty.
+    pdf = make_pdf(["", ""], name="scan.pdf")
 
-    assert load_pdf_as_documents(pdf) == []
+    with pytest.raises(EmptyDocumentError):
+        PdfLoader(AppConfig()).load(pdf)
 
 
-def test_a_document_needing_too_much_ocr_is_refused(make_pdf, ocr_enabled, monkeypatch):
-    monkeypatch.setattr(ocr, "MAX_OCR_PAGES", 2)
+def test_a_document_needing_too_much_ocr_is_refused(make_pdf, ocr_enabled):
     pdf = make_pdf(["", "", ""], name="long_scan.pdf")
 
     with pytest.raises(ScannedPdfTooLong) as caught:
-        extract_pages_from_pdf(pdf)
+        PdfLoader(AppConfig(max_ocr_pages=2)).load(pdf)
 
     assert "long_scan.pdf" in caught.value.message
     assert caught.value.hint
 
 
-def test_the_page_limit_does_not_apply_when_ocr_is_off(make_pdf, monkeypatch):
-    # No OCR means no long OCR pass to refuse — the pages are simply skipped.
-    monkeypatch.setattr(ocr, "MAX_OCR_PAGES", 1)
-    pdf = make_pdf(["", "", ""])
+def test_the_page_limit_does_not_apply_when_ocr_is_off(make_pdf):
+    # No OCR means no long OCR pass to refuse — the pages are simply skipped,
+    # which leaves nothing to load.
+    pdf = make_pdf(["", "", ""], name="scan.pdf")
 
-    assert extract_pages_from_pdf(pdf) == []
+    with pytest.raises(EmptyDocumentError):
+        PdfLoader(AppConfig(max_ocr_pages=1)).load(pdf)
 
 
 # ── Choosing the right message ─────────────────────────────────────────────────

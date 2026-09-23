@@ -22,7 +22,7 @@ requires no API key.
 ```mermaid
 graph LR
     U[User] --> S[Streamlit UI<br/>app.py]
-    S --> P[RAG pipeline<br/>pdf_handler / vector_store / rag_chain]
+    S --> P[RagPipeline<br/>LoaderFactory · TextSplitter<br/>VectorStore · LLMProvider]
     P --> O[Ollama runtime<br/>localhost:11434]
     O --> M[(Local models<br/>llama3 · nomic-embed-text · llava)]
     P --> F[(FAISS index<br/>in process memory)]
@@ -46,23 +46,32 @@ Three things are worth noticing in that diagram:
 ## 2. Component structure
 
 The codebase is organised by pipeline stage rather than by technical layer. Each
-module owns one step and can be tested in isolation.
+class owns one step and can be tested in isolation.
 
 | Module | Responsibility | Depends on |
 |---|---|---|
-| `app.py` | Streamlit UI: mode selector, upload handling, chat loops, error rendering | every module below |
-| `pdf_handler.py` | PDF → per-page text → chunked `Document`s tagged with source and page | pdfplumber, LangChain splitter |
-| `vector_store.py` | Chunks → embeddings → FAISS index; similarity retrieval | langchain-ollama, FAISS |
-| `rag_chain.py` | Retrieved chunks → cited prompt → streamed answer | ollama |
-| `llm_chain.py` | The chat tab's text and vision paths | langchain-ollama, ollama, Pillow |
-| `chat_history.py` | In-memory conversation history and text export | — |
+| `app.py` | Streamlit UI only: widgets, session state, error rendering. It builds the objects below once at startup and calls methods on them | `documind/`, `errors.py` |
+| `documind/documents/` | `DocumentLoader` — the one way a file becomes a `Document`; `PdfLoader` (per-page text, OCR fallback) and `TextLoader` (`.txt`/`.md`) implement it; `LoaderFactory` picks between them by extension; `TextSplitter` cuts a `Document` into page-tagged `Chunk`s | pdfplumber, `ocr.py`, LangChain splitter |
+| `documind/rag/` | `VectorStore` — `Chunk`s in, the matching `Chunk`s back out; the FAISS index, the embedding model and the metadata keys all stay inside it. `RagPipeline` — the upload and question paths end to end, built from a `LoaderFactory`, a `TextSplitter`, a `VectorStore` and an `LLMProvider`; it also writes the cited prompt and the Sources list | langchain-ollama, FAISS |
+| `documind/llm/` | `LLMProvider` — what the app asks of a model; `OllamaProvider` — the chat, vision and document-answer calls to Ollama | langchain-ollama, ollama, Pillow |
+| `documind/chat/` | `ChatSession` — the conversation, the only object that can change it, and its text export | — |
+| `documind/config.py` | `AppConfig` — every tunable setting in one frozen object, handed to whoever needs it | — |
+| `ocr.py` | Optional Tesseract fallback: detect a page with no text layer, render it, read it | pytesseract, Pillow |
 | `errors.py` | Failure translation and pre-flight readiness checks | ollama, httpx |
-| `config.py` | Tunable settings: models, prompts, UI labels | — |
+| `config.py` | UI vocabulary only: mode names and avatars | — |
 
 The dependency graph is acyclic and shallow: `app.py` depends on the pipeline
-modules, the pipeline modules depend only on libraries, and nothing depends on
+classes, the pipeline classes depend only on libraries, and nothing depends on
 `app.py`. That is what makes the pipeline testable without Streamlit, and what
 lets the test suite exercise the whole chain without a UI.
+
+Since the OOP refactor the UI file contains no pipeline knowledge at all: an
+upload is `RagPipeline.ingest(file)` and a question is `RagPipeline.ask(question)`,
+and `grep -nE "pdfplumber|ollama|faiss|langchain" app.py` returns nothing. The
+four modules that used to hold the procedural pipeline — `pdf_handler.py`,
+`vector_store.py`, `rag_chain.py`, `llm_chain.py` — and the `chat_history.py`
+list no longer exist; each was deleted once the class replacing it covered its
+callers.
 
 ---
 
@@ -80,14 +89,19 @@ instead of recalled text. The answer is *grounded* in the document.
 graph TD
     A[Uploaded PDF] --> B{Size ≤ 25 MB?}
     B -- no --> X[PdfTooLarge — refused before parsing]
-    B -- yes --> C[pdfplumber: extract text per page]
+    B -- yes --> C[PdfLoader: extract text per page<br/>OCR fallback per page]
     C --> D{Any text found?}
-    D -- no --> Y[NoTextInPdf — scanned document]
-    D -- yes --> E[Split each page separately<br/>500 chars, 50 overlap]
-    E --> F[Document chunks tagged<br/>source = filename, page = n]
-    F --> G[nomic-embed-text → vectors]
+    D -- no --> Y[EmptyDocumentError — nothing readable]
+    D -- yes --> E[TextSplitter: split each page separately<br/>500 chars, 50 overlap]
+    E --> F[Chunks tagged<br/>source = filename, page = n]
+    F --> G[VectorStore: nomic-embed-text → vectors]
     G --> H[(FAISS index)]
 ```
+
+The whole column is one call — `RagPipeline.ingest(file)` — which returns an
+`IngestReport`: the document's name, its page count, how many chunks were
+indexed, how many pages needed OCR, and how long it took. The UI reports those
+numbers and knows nothing about the steps that produced them.
 
 Two properties of this stage carry the rest of the system:
 
@@ -98,11 +112,13 @@ to it would be a guess. Splitting page by page guarantees each chunk belongs to
 exactly one page. The cost is a few short chunks at page ends. A test,
 `test_no_chunk_spans_two_pages`, pins this invariant.
 
-**Metadata as a first-class payload.** Each chunk is a LangChain `Document`
-carrying `{"source": filename, "page": n}`, and the index is built with
-`FAISS.from_documents` rather than `from_texts`. This is the single change that
-makes citation possible: the metadata survives embedding and comes back attached
-to every retrieval result.
+**Metadata as a first-class payload.** Each chunk is a `Chunk` carrying its
+source filename and page number as typed fields. `VectorStore` flattens those
+into the `{"source": ..., "page": ...}` dictionary FAISS stores, builds the index
+with `FAISS.from_documents` rather than `from_texts`, and rebuilds a `Chunk` from
+the dictionary on the way back out. That round trip is the single change that
+makes citation possible — and because it happens in one class, no other file in
+the project ever writes those two metadata keys.
 
 ### 3.2 Retrieval
 
@@ -194,15 +210,15 @@ empirical testing rather than assumption.
 
 ## 5. Testing strategy
 
-The suite has 66 tests and runs with **no Ollama server and no model pulled**.
+The suite has 227 tests and runs with **no Ollama server and no model pulled**.
 That constraint drove several design choices and is the reason the tests are
 usable in CI rather than being a demo script.
 
 ```mermaid
 graph TD
     A["test_app_smoke.py — boots app.py<br/>via Streamlit's script runner"] --> B
-    B["test_integration.py — PDF bytes → answer"] --> C
-    C["test_pdf_handler · test_vector_store<br/>test_rag_chain · test_errors"]
+    B["test_integration.py — PDF bytes → answer<br/>through the real object graph"] --> C
+    C["test_document_loader · test_text_splitter<br/>test_rag_vector_store · test_rag_pipeline<br/>test_ollama_provider · test_errors"]
 
     style A fill:#4a3f6b,color:#fff
     style B fill:#3f5a6b,color:#fff
@@ -215,13 +231,19 @@ graph TD
 | Integration | The whole chain from PDF bytes to a cited answer | Fake embeddings, stubbed Ollama |
 | Smoke | `app.py` actually starts and renders, with Ollama up and down | Stubbed `ollama.list` |
 
-Two techniques make this possible:
+Three techniques make this possible:
 
-**Injectable embeddings.** `build_vector_store(chunks, embeddings=None)`
-defaults to `OllamaEmbeddings` but accepts any `Embeddings` implementation. The
-tests pass a deterministic bag-of-words fake. Because it is a real `Embeddings`
-subclass, FAISS indexing and similarity search are genuinely executed — only the
-model behind them is substituted.
+**Injectable embeddings.** `VectorStore(config, embeddings=None)` defaults to
+`OllamaEmbeddings` but accepts any `Embeddings` implementation. The tests pass a
+deterministic bag-of-words fake. Because it is a real `Embeddings` subclass,
+FAISS indexing and similarity search are genuinely executed — only the model
+behind them is substituted.
+
+**A substitutable model.** `RagPipeline` is handed an `LLMProvider`, not an
+Ollama client, so a test can pass a `FakeProvider` that implements the same four
+methods and replays canned tokens. The pipeline cannot tell the difference, which
+is what lets the ingest-to-citation path be exercised with no server anywhere —
+and is the clearest demonstration in the codebase of why the abstraction exists.
 
 **Generated test PDFs.** `tests/conftest.py` contains a small raw PDF writer
 that builds a valid PDF from a list of page strings. A test asserting "this

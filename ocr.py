@@ -31,11 +31,6 @@ OCR_RESOLUTION = 300
 # A page whose text layer is shorter than this is treated as not having one.
 MIN_CHARS_FOR_TEXT_LAYER = 20
 
-# OCR costs roughly a second or two per page. Past this many pages the wait
-# stops being reasonable for an interactive upload, so we refuse rather than
-# leave the user watching a spinner for ten minutes.
-MAX_OCR_PAGES = 50
-
 
 @functools.lru_cache(maxsize=1)
 def is_available() -> bool:

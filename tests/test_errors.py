@@ -11,6 +11,9 @@ import ollama
 import pytest
 
 import errors
+from documind.config import AppConfig
+from documind.documents.models import ExtractedPage
+from documind.documents.pdf_loader import PdfLoader
 from errors import (
     MAX_PDF_MB,
     FriendlyError,
@@ -26,7 +29,6 @@ from errors import (
     translate,
     validate_pdf_upload,
 )
-from pdf_handler import extract_pages_from_pdf
 
 from conftest import UploadedPdf
 
@@ -196,14 +198,16 @@ def test_validation_does_not_disturb_the_read_position(make_pdf):
     validate_pdf_upload(pdf)
 
     # The file must still be readable from the start afterwards.
-    assert extract_pages_from_pdf(pdf) == [(1, "page one text")]
+    assert PdfLoader(AppConfig()).load(pdf).pages == (
+        ExtractedPage(number=1, text="page one text", used_ocr=False),
+    )
 
 
 def test_a_corrupt_file_raises_something_we_can_translate():
     garbage = UploadedPdf(b"this is definitely not a PDF", "broken.pdf")
 
     with pytest.raises(Exception) as caught:
-        extract_pages_from_pdf(garbage)
+        PdfLoader(AppConfig()).load(garbage)
 
     assert isinstance(translate(caught.value, "broken.pdf"), UnreadablePdf)
 
