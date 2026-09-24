@@ -329,6 +329,15 @@ else:
                     f"page(s), {report.chunk_count} chunks in "
                     f"{report.elapsed_seconds:.1f}s.{ocr_note}"
                 )
+                # The pipeline reports every OCR'd page's confidence; deciding
+                # which ones are worth warning about is a presentation choice,
+                # so the threshold is applied here, where the config is.
+                for page_number, confidence in report.ocr_confidences:
+                    if confidence < config.ocr_min_confidence:
+                        st.warning(
+                            f"Page {page_number} was recognised with "
+                            f"{confidence:.0f}% confidence — the answer may be unreliable."
+                        )
 
         if st.session_state.vector_store.is_ready:
             st.markdown(

@@ -23,6 +23,8 @@ from langchain_core.embeddings import Embeddings
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ocr  # noqa: E402 — must follow the sys.path fix above
+from documind.ocr.models import OcrResult  # noqa: E402
+from documind.ocr.ocr_engine import OcrEngine  # noqa: E402
 
 
 # ── A minimal PDF writer ───────────────────────────────────────────────────────
@@ -146,7 +148,35 @@ def ocr_disabled_by_default(monkeypatch):
 
     Without this the suite would behave differently on a machine that happens to
     have Tesseract installed: pages with a thin text layer would be OCR'd instead
-    of skipped. Tests that exercise OCR re-patch `is_available` themselves, and
-    because they do so after this fixture, theirs wins.
+    of skipped. Tests that exercise OCR hand PdfLoader a FakeOcrEngine, which
+    answers `is_available` for itself, or re-patch `is_available` after this
+    fixture so theirs wins.
     """
     monkeypatch.setattr(ocr, "is_available", lambda: False)
+
+
+class FakeOcrEngine(OcrEngine):
+    """
+    An OCR engine that never runs Tesseract.
+
+    It reports itself installed, reads every image as the same fixed text with
+    the same fixed confidence, and records each image it was handed — which is
+    how tests check which pages were actually sent to OCR.
+    """
+
+    def __init__(self, text: str = "text recovered by OCR", confidence: float = 87.5):
+        self.text = text
+        self.confidence = confidence
+        self.images: list = []
+
+    def is_available(self) -> bool:
+        return True
+
+    def recognise(self, image) -> OcrResult:
+        self.images.append(image)
+        return OcrResult(self.text, self.confidence)
+
+
+@pytest.fixture
+def fake_ocr_engine():
+    return FakeOcrEngine()

@@ -59,3 +59,11 @@ class AppConfig:
     # OCR costs roughly a second or two per page, so a document needing more
     # than this many scanned pages is refused rather than started.
     max_ocr_pages: int = 50
+
+    # The Tesseract language pack OCR reads with. Only "eng" is installed on the
+    # development machine today; Macedonian is "mkd" once its pack is added.
+    ocr_language: str = "eng"
+
+    # Mean word confidence (0-100) below which a recognised page is treated as
+    # unreliable.
+    ocr_min_confidence: float = 90.0

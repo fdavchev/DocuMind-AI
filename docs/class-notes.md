@@ -385,3 +385,47 @@ way. Deleting them is part of the exhibit rather than tidying afterwards: two
 implementations of the same pipeline living side by side is how a codebase ends
 up defending dead code, and every assertion those old test files made is still
 made somewhere — against the class that took the work over.
+
+## OcrEngine and OcrResult (`documind/ocr/`)
+
+`OcrEngine` takes an image and returns an `OcrResult`: the text Tesseract read,
+in the language set by `AppConfig.ocr_language` ("eng" for now, "mkd" once the
+Macedonian pack is installed), plus a confidence score from 0 to 100. Before
+reading, it turns the image greyscale and straightens it by trying angles from
+-5 to +5 degrees and keeping the one where the rows of text line up best. That
+check uses numpy, which the project already has, so no large new dependency
+like OpenCV is needed. The confidence is the average of Tesseract's own
+per-word scores, so it can be computed for every page without knowing the right
+answer, and it is the number the UI warning and the evaluation will use later.
+The principle on show is encapsulation: a native tool that may not be installed
+sits behind one small class, and a failed read comes back as empty text with
+confidence 0 instead of crashing the upload.
+
+## PdfLoader now reads scanned pages through OcrEngine
+
+`PdfLoader` no longer calls the `ocr.ocr_page` module function to read a scanned
+page; it turns the page into an image itself and hands that image to an
+`OcrEngine`, which it receives through its constructor, or builds on its own
+when none is given. The reason is testability: because the engine is passed in,
+a test can give the loader a fake engine that returns a chosen text and
+confidence, instead of quietly replacing module functions behind the loader's
+back. The rules that decide *which* pages need OCR, and when a document is too
+long to OCR, did not change. This is also the first place `ExtractedPage.ocr_confidence`
+is ever filled in: a page read by OCR carries the engine's confidence score, and
+a page with its own text layer keeps `None`. The principle on show is dependency
+injection: `PdfLoader` depends on an object it is given, not on a function it
+reaches for.
+
+## Low-confidence OCR pages are shown as warnings
+
+`OcrEngine` now averages confidence only over boxes that actually contain a
+recognised word, because Tesseract also gives high scores to empty boxes, which
+made a page with almost no text look confidently read. `IngestReport` gained
+`ocr_confidences`, a list of `(page number, confidence)` for every page read by
+OCR, which `RagPipeline.ingest()` fills in from the pages the loader returned.
+`app.py` then shows a warning such as "Page 1 was recognised with 42%
+confidence — the answer may be unreliable." for each page below
+`AppConfig.ocr_min_confidence`; the pipeline reports every page and the UI
+chooses which ones to warn about, because deciding what the user sees is the
+UI's job. No new OO principle is shown here; this is data travelling through
+objects that already exist, which is what the earlier design was built to allow.
