@@ -66,4 +66,4 @@ class AppConfig:
 
     # Mean word confidence (0-100) below which a recognised page is treated as
     # unreliable.
-    ocr_min_confidence: float = 60.0
+    ocr_min_confidence: float = 90.0

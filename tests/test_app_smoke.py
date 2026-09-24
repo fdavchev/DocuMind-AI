@@ -306,7 +306,7 @@ def test_a_low_confidence_scanned_page_is_warned_about(monkeypatch, pdf_mode_app
 
 
 def test_a_confidently_read_scanned_page_is_not_warned_about(monkeypatch, pdf_mode_app):
-    _ocr_reads_every_page_with(monkeypatch, 83.3)
+    _ocr_reads_every_page_with(monkeypatch, 95.0)
 
     at = pdf_mode_app.file_uploader[0].set_value([SCANNED_PDF]).run()
 
