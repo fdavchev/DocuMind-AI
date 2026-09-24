@@ -102,6 +102,10 @@ class OllamaProvider(LLMProvider):
             model=self._config.answer_model,
             messages=[{"role": "user", "content": prompt}],
             stream=True,
+            options={
+                "temperature": self._config.temperature,
+                "num_predict": self._config.max_tokens,
+            },
         )
         for chunk in stream:
             token = chunk["message"]["content"]
