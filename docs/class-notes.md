@@ -385,3 +385,18 @@ way. Deleting them is part of the exhibit rather than tidying afterwards: two
 implementations of the same pipeline living side by side is how a codebase ends
 up defending dead code, and every assertion those old test files made is still
 made somewhere — against the class that took the work over.
+
+## OcrEngine and OcrResult (`documind/ocr/`)
+
+`OcrEngine` takes an image and returns an `OcrResult`: the text Tesseract read,
+in the language set by `AppConfig.ocr_language` ("eng" for now, "mkd" once the
+Macedonian pack is installed), plus a confidence score from 0 to 100. Before
+reading, it turns the image greyscale and straightens it by trying angles from
+-5 to +5 degrees and keeping the one where the rows of text line up best. That
+check uses numpy, which the project already has, so no large new dependency
+like OpenCV is needed. The confidence is the average of Tesseract's own
+per-word scores, so it can be computed for every page without knowing the right
+answer, and it is the number the UI warning and the evaluation will use later.
+The principle on show is encapsulation: a native tool that may not be installed
+sits behind one small class, and a failed read comes back as empty text with
+confidence 0 instead of crashing the upload.
