@@ -156,6 +156,13 @@ the right call if the use case shifted toward a fixed corpus that is queried
 repeatedly over time; it is the wrong call for "upload a document and ask about
 it", which is what this app is.
 
+**Reconsidered during Phase 3 hardening** *(2026-09-24)*: the hardening pass
+considered adding save/load keyed by a file hash, so a repeat upload skips
+re-embedding. Declined for the same reason as above — it would only save
+10–30s on a same-file re-upload, which isn't how the demo or the evaluation
+runs, and it would mean explaining at the defense why a documented privacy
+guarantee was reversed for a marginal speed gain. The decision stands.
+
 ---
 
 ## 10 — Failure translation lives in one module, not at each call site

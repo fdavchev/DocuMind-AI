@@ -3,6 +3,22 @@
 Plain-language notes on each class introduced during the object-oriented
 refactor: what it does, why it is built that way, and what it demonstrates.
 
+## OllamaProvider.stream_answer — temperature and max_tokens now applied (Phase 8 hardening)
+
+`stream_answer` is the method that generates answers for the PDF/RAG tab. Until
+this fix it called `ollama.chat()` with no `options` dict at all, so
+`AppConfig.temperature` and `AppConfig.max_tokens` — set on every other call in
+the file — were silently ignored for document answers specifically. The fix
+adds the same `options={"temperature": ..., "num_predict": ...}` dict that
+`stream_chat` and `stream_vision` already pass. `config.system_prompt` was
+deliberately left out here: it's generic vision-assistant wording, while the
+RAG prompt already carries its own tailored instructions (context-only
+answers, inline citations), and prepending the generic prompt on top would
+dilute rather than help. This isn't a new class — it demonstrates that
+`AppConfig` values only take effect where a class actually reads them, which
+is why "every value injected" has to be checked call site by call site, not
+just at the dataclass definition.
+
 ## AppConfig (`documind/config.py`)
 
 `AppConfig` is a small object that holds every setting the application runs on —
