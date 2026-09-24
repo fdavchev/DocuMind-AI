@@ -35,13 +35,6 @@ class UploadedText(io.BytesIO):
 
 
 @pytest.fixture
-def ocr_enabled(monkeypatch):
-    """Pretend Tesseract is installed and reads every page as a fixed string."""
-    monkeypatch.setattr(ocr, "is_available", lambda: True)
-    monkeypatch.setattr(ocr, "ocr_page", lambda page: "text recovered by OCR")
-
-
-@pytest.fixture
 def make_txt():
     """make_txt("file contents", name="notes.md")"""
 
@@ -263,51 +256,53 @@ def test_a_text_layer_page_is_not_marked_as_ocr(make_pdf):
     assert document.pages[0].ocr_confidence is None
 
 
-def test_a_scanned_page_is_recovered_by_ocr(make_pdf, ocr_enabled):
+def test_a_scanned_page_is_recovered_by_ocr(make_pdf, fake_ocr_engine):
     pdf = make_pdf(["a page with a proper text layer on it", ""], name="scan.pdf")
 
-    document = PdfLoader(AppConfig()).load(pdf)
+    document = PdfLoader(AppConfig(), ocr_engine=fake_ocr_engine).load(pdf)
 
     assert document.pages[1].text == "text recovered by OCR"
     assert [page.used_ocr for page in document.pages] == [False, True]
     assert document.ocr_page_count == 1
 
 
-def test_pages_with_a_text_layer_are_not_sent_to_ocr(make_pdf, monkeypatch):
-    monkeypatch.setattr(ocr, "is_available", lambda: True)
-    calls = []
-    monkeypatch.setattr(ocr, "ocr_page", lambda page: calls.append(page) or "unused")
+def test_pages_with_a_text_layer_are_not_sent_to_ocr(make_pdf, fake_ocr_engine):
+    PdfLoader(AppConfig(), ocr_engine=fake_ocr_engine).load(
+        make_pdf(["a page with a proper text layer on it"])
+    )
 
-    PdfLoader(AppConfig()).load(make_pdf(["a page with a proper text layer on it"]))
-
-    assert calls == []
+    assert fake_ocr_engine.images == []
 
 
-def test_use_ocr_false_forces_the_text_layer_only_path(make_pdf, ocr_enabled):
+def test_use_ocr_false_forces_the_text_layer_only_path(make_pdf, fake_ocr_engine):
     pdf = make_pdf(["a page with a proper text layer on it", ""])
 
-    document = PdfLoader(AppConfig(), use_ocr=False).load(pdf)
+    document = PdfLoader(
+        AppConfig(), use_ocr=False, ocr_engine=fake_ocr_engine
+    ).load(pdf)
 
     assert [page.number for page in document.pages] == [1]
 
 
-def test_a_document_needing_too_much_ocr_is_refused(make_pdf, ocr_enabled):
+def test_a_document_needing_too_much_ocr_is_refused(make_pdf, fake_ocr_engine):
     pdf = make_pdf(["", "", ""], name="long_scan.pdf")
 
     with pytest.raises(ScannedPdfTooLong) as caught:
-        PdfLoader(AppConfig(max_ocr_pages=2)).load(pdf)
+        PdfLoader(AppConfig(max_ocr_pages=2), ocr_engine=fake_ocr_engine).load(pdf)
 
     assert "long_scan.pdf" in caught.value.message
     assert caught.value.hint
 
 
-def test_the_ocr_threshold_is_the_documented_one(make_pdf, ocr_enabled):
+def test_the_ocr_threshold_is_the_documented_one(make_pdf, fake_ocr_engine):
     # A page holding fewer characters than MIN_CHARS_FOR_TEXT_LAYER has no
     # usable text layer, however many characters extract_text() returned.
     thin = "x" * (ocr.MIN_CHARS_FOR_TEXT_LAYER - 1)
     thick = "y" * ocr.MIN_CHARS_FOR_TEXT_LAYER
 
-    document = PdfLoader(AppConfig()).load(make_pdf([thin, thick]))
+    document = PdfLoader(AppConfig(), ocr_engine=fake_ocr_engine).load(
+        make_pdf([thin, thick])
+    )
 
     assert document.pages[0].text == "text recovered by OCR"
     assert document.pages[0].used_ocr

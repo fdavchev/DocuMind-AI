@@ -13,8 +13,8 @@
 # that element [0] is the page number, and a typo in "page" fails silently at
 # retrieval time rather than loudly where it was written. A named field cannot be
 # misread, cannot be misspelled without an error, and can be extended — which is
-# why ExtractedPage already has room for an OCR confidence score that no code
-# produces yet.
+# how ExtractedPage gained an OCR confidence score without changing the shape
+# every other module already reads.
 #
 # WHY FROZEN:
 # These objects describe what was read from a file. Nothing downstream has any
@@ -43,8 +43,8 @@ class ExtractedPage:
     text: str
     used_ocr: bool
 
-    # No confidence scoring exists yet; the field is here so a later phase can
-    # fill it in without changing the shape every other module already reads.
+    # Tesseract's mean word confidence (0-100) for a page read by OCR, filled in
+    # by PdfLoader; None for a page whose text came from its own text layer.
     ocr_confidence: float | None = None
 
 

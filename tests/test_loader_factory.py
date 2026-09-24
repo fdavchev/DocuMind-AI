@@ -20,6 +20,8 @@ from documind.documents.loader_factory import LoaderFactory
 from documind.documents.models import Document, ExtractedPage
 from documind.documents.pdf_loader import PdfLoader
 from documind.documents.text_loader import TextLoader
+from documind.ocr.models import OcrResult
+from documind.ocr.ocr_engine import OcrEngine
 from errors import FriendlyError, ScannedPdfTooLong, UnsupportedFileError
 
 
@@ -30,9 +32,18 @@ def factory():
 
 @pytest.fixture
 def ocr_enabled(monkeypatch):
-    """Pretend Tesseract is installed and reads every page as a fixed string."""
+    """
+    Pretend Tesseract is installed and reads every image as a fixed string.
+
+    Patched on OcrEngine rather than injected, because the factory builds the
+    loader — and so its engine — itself.
+    """
     monkeypatch.setattr(ocr, "is_available", lambda: True)
-    monkeypatch.setattr(ocr, "ocr_page", lambda page: "text recovered by OCR")
+    monkeypatch.setattr(
+        OcrEngine,
+        "recognise",
+        lambda self, image: OcrResult("text recovered by OCR", 87.5),
+    )
 
 
 @pytest.fixture

@@ -400,3 +400,18 @@ answer, and it is the number the UI warning and the evaluation will use later.
 The principle on show is encapsulation: a native tool that may not be installed
 sits behind one small class, and a failed read comes back as empty text with
 confidence 0 instead of crashing the upload.
+
+## PdfLoader now reads scanned pages through OcrEngine
+
+`PdfLoader` no longer calls the `ocr.ocr_page` module function to read a scanned
+page; it turns the page into an image itself and hands that image to an
+`OcrEngine`, which it receives through its constructor, or builds on its own
+when none is given. The reason is testability: because the engine is passed in,
+a test can give the loader a fake engine that returns a chosen text and
+confidence, instead of quietly replacing module functions behind the loader's
+back. The rules that decide *which* pages need OCR, and when a document is too
+long to OCR, did not change. This is also the first place `ExtractedPage.ocr_confidence`
+is ever filled in: a page read by OCR carries the engine's confidence score, and
+a page with its own text layer keeps `None`. The principle on show is dependency
+injection: `PdfLoader` depends on an object it is given, not on a function it
+reaches for.
