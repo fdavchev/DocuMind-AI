@@ -5,7 +5,7 @@ The invariant these tests exist for is DECISIONS.md #1 — each page is split on
 its own, so no chunk is ever assembled from two pages and every citation points
 at exactly one of them. The rest pin the configured chunk size, the provenance
 carried on each Chunk, and the shape of the edge cases (blank pages, an empty
-document) that the old module-level functions were already trusted to handle.
+document, fragments with almost no letters) that must never reach the index.
 """
 
 import dataclasses
@@ -175,6 +175,26 @@ def test_an_empty_document_produces_no_chunks():
 
 def test_a_whitespace_only_page_produces_no_chunks():
     assert _splitter().split(_document((1, "   \n\n  "))) == []
+
+
+def test_a_page_with_almost_no_letters_produces_no_chunks():
+    # A lone ")" or a page number embeds as a generic vector that falsely
+    # matches many questions, so it must never reach the index.
+    document = _document((1, "alpha_marker"), (2, ")"), (3, "12 ."), (4, "gamma_marker"))
+
+    assert [chunk.page_number for chunk in _splitter().split(document)] == [1, 4]
+
+
+def test_a_short_page_with_enough_letters_is_kept_in_any_alphabet():
+    document = _document((1, "Fig"), (2, "Шум"))
+
+    assert [chunk.page_number for chunk in _splitter().split(document)] == [1, 2]
+
+
+def test_the_minimum_letter_count_comes_from_config():
+    document = _document((1, "Fig"))
+
+    assert _splitter(min_chunk_letters=4).split(document) == []
 
 
 def test_a_blank_page_between_two_real_ones_is_skipped():

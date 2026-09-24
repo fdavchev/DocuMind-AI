@@ -2,9 +2,10 @@
 #
 # WHAT THIS FILE DOES:
 # Reads an uploaded PDF page by page, falling back to OCR on pages that have no
-# text layer. It is the PDF half of DocumentLoader: the only thing it adds to
-# the base class is `_extract_pages`, because validating the file, naming the
-# document and refusing an empty one are already written once in `load()`.
+# text layer. It is the PDF half of DocumentLoader: all it adds to the base
+# class is `_extract_pages`, plus `_read_metadata` for the title and author a
+# PDF can declare, because validating the file, naming the document and
+# refusing an empty one are already written once in `load()`.
 #
 # WHY OCR IS DECIDED PER DOCUMENT AND APPLIED PER PAGE:
 # The pages needing OCR are counted before anything is read, so a document that
@@ -26,7 +27,7 @@ import pdfplumber
 import ocr
 from documind.config import AppConfig
 from documind.documents.document_loader import DocumentLoader
-from documind.documents.models import ExtractedPage
+from documind.documents.models import DocumentMetadata, ExtractedPage
 from documind.ocr.models import OcrResult
 from documind.ocr.ocr_engine import OcrEngine
 from errors import ScannedPdfTooLong
@@ -120,6 +121,21 @@ class PdfLoader(DocumentLoader):
 
         return pages
 
+    def _read_metadata(self, file) -> DocumentMetadata:
+        """
+        The Title and Author entries of the PDF's document properties.
+
+        pdfplumber decodes them to strings when it can; an entry that is
+        missing, or that did not decode to text, counts as not declared.
+        """
+        with pdfplumber.open(file) as pdf:
+            properties = pdf.metadata
+
+        return DocumentMetadata(
+            title=_text_property(properties, "Title"),
+            authors=_text_property(properties, "Author"),
+        )
+
     def _recognise_page(self, page) -> OcrResult:
         """The OCR engine's reading of one pdfplumber page, rendered to an image."""
         try:
@@ -132,3 +148,9 @@ class PdfLoader(DocumentLoader):
             return OcrResult("", 0.0)
 
         return self._ocr_engine.recognise(image)
+
+
+def _text_property(properties: dict, key: str) -> str:
+    """One document property as trimmed text, or "" if it is absent or not text."""
+    value = properties.get(key)
+    return value.strip() if isinstance(value, str) else ""

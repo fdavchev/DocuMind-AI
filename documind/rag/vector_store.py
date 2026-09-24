@@ -6,9 +6,9 @@
 # still carrying the file and page they were found on.
 #
 # HOW THE SEARCH WORKS:
-# Each chunk is turned into a vector (a list of ~768 numbers) by the
-# nomic-embed-text model running locally in Ollama, and the vectors are kept in
-# a FAISS index. A question is turned into a vector the same way, and FAISS
+# Each chunk is turned into a vector (a list of 768 numbers) by the
+# nomic-embed-text-v2-moe model running locally in Ollama, and the vectors are
+# kept in a FAISS index. A question is turned into a vector the same way, and FAISS
 # returns the chunks whose vectors sit closest to it. Think of every chunk as a
 # point in space: similar text lands nearby, and FAISS finds the nearest
 # neighbours fast.
@@ -40,6 +40,7 @@ from collections.abc import Sequence
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_ollama import OllamaEmbeddings
 
 from documind.config import AppConfig
@@ -51,6 +52,34 @@ from documind.documents.models import Chunk
 # several call sites.
 SOURCE_KEY = "source"
 PAGE_KEY = "page"
+
+
+class TaskPrefixedEmbeddings(Embeddings):
+    """
+    An embedding model that is told, on every call, which side of the search
+    a text is on.
+
+    nomic-embed-text-v2-moe was trained on inputs that start with a task
+    prefix, and its documentation asks for `search_document: ` on indexed passages and
+    `search_query: ` on questions. The prefix is added only on the way into the
+    model: FAISS stores and returns the passage text unchanged, so citations
+    and the prompt never see it.
+    """
+
+    def __init__(self, inner: Embeddings, document_prefix: str, query_prefix: str):
+        self._inner = inner
+        self._document_prefix = document_prefix
+        self._query_prefix = query_prefix
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """One vector per passage, each embedded as a document."""
+        return self._inner.embed_documents(
+            [self._document_prefix + text for text in texts]
+        )
+
+    def embed_query(self, text: str) -> list[float]:
+        """The question's vector, embedded as a query."""
+        return self._inner.embed_query(self._query_prefix + text)
 
 
 class VectorStore:
@@ -234,8 +263,14 @@ class VectorStore:
     # ── Small decisions the caller should not have to make ────────────────────
 
     def _resolve_embeddings(self):
+        # Only the real model gets the task prefixes: an injected model (the
+        # tests' FakeEmbeddings) is used exactly as it was handed in.
         if self._embeddings is None:
-            self._embeddings = OllamaEmbeddings(model=self._config.embedding_model)
+            self._embeddings = TaskPrefixedEmbeddings(
+                OllamaEmbeddings(model=self._config.embedding_model),
+                document_prefix=self._config.embedding_document_prefix,
+                query_prefix=self._config.embedding_query_prefix,
+            )
         return self._embeddings
 
     def _resolve_k(self, k: int | None) -> int:

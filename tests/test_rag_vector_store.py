@@ -10,12 +10,13 @@ from dataclasses import replace
 
 import pytest
 from conftest import FakeEmbeddings
+from langchain_core.embeddings import Embeddings
 
 from documind.config import AppConfig
 from documind.documents.models import Chunk
 from documind.documents.pdf_loader import PdfLoader
 from documind.documents.text_splitter import TextSplitter
-from documind.rag.vector_store import VectorStore
+from documind.rag.vector_store import TaskPrefixedEmbeddings, VectorStore
 
 
 def _chunks(*triples) -> list[Chunk]:
@@ -307,6 +308,76 @@ def test_a_batch_that_fails_leaves_the_index_as_it_was():
 
     assert store.sources == ("a.pdf",)
     assert len(store.search("text", k=20)) == 2
+
+
+# ── nomic-embed-text-v2-moe's task prefixes ──────────────────────────────────
+
+class TextRecordingEmbeddings(FakeEmbeddings):
+    """FakeEmbeddings that remembers every text it was asked to embed."""
+
+    def __init__(self):
+        self.document_texts: list[str] = []
+        self.query_texts: list[str] = []
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.document_texts.extend(texts)
+        return super().embed_documents(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        self.query_texts.append(text)
+        return super().embed_query(text)
+
+
+def _prefixed(inner: Embeddings) -> TaskPrefixedEmbeddings:
+    return TaskPrefixedEmbeddings(
+        inner, document_prefix="search_document: ", query_prefix="search_query: "
+    )
+
+
+def test_passages_are_embedded_with_the_document_prefix():
+    inner = TextRecordingEmbeddings()
+
+    _prefixed(inner).embed_documents(["the budget", "the lab"])
+
+    assert inner.document_texts == [
+        "search_document: the budget",
+        "search_document: the lab",
+    ]
+
+
+def test_questions_are_embedded_with_the_query_prefix():
+    inner = TextRecordingEmbeddings()
+
+    _prefixed(inner).embed_query("what is the budget?")
+
+    assert inner.query_texts == ["search_query: what is the budget?"]
+
+
+def test_the_prefix_never_reaches_the_stored_or_returned_text():
+    inner = TextRecordingEmbeddings()
+    store = VectorStore(AppConfig(), embeddings=_prefixed(inner))
+    store.build(_chunks(FINANCE))
+
+    hit = store.search("budget forecast")[0]
+
+    assert inner.query_texts == ["search_query: budget forecast"]
+    assert hit.text == FINANCE[0]
+
+
+def test_the_default_ollama_model_gets_the_configured_prefixes():
+    config = AppConfig()
+
+    embeddings = VectorStore(config)._resolve_embeddings()
+
+    assert isinstance(embeddings, TaskPrefixedEmbeddings)
+    assert embeddings._document_prefix == config.embedding_document_prefix
+    assert embeddings._query_prefix == config.embedding_query_prefix
+
+
+def test_an_injected_embedding_model_is_used_unwrapped(fake_embeddings):
+    store = VectorStore(AppConfig(), embeddings=fake_embeddings)
+
+    assert store._resolve_embeddings() is fake_embeddings
 
 
 # ── Which files are indexed ───────────────────────────────────────────────────

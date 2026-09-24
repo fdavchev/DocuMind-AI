@@ -34,11 +34,13 @@
 # available until the next question replaces them.
 
 import time
+import unicodedata
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
+from documind.config import AnswerLanguage, AppConfig
 from documind.documents.loader_factory import LoaderFactory
-from documind.documents.models import Chunk
+from documind.documents.models import Chunk, Document
 from documind.documents.text_splitter import TextSplitter
 from documind.llm.llm_provider import LLMProvider
 from documind.rag.vector_store import VectorStore
@@ -47,6 +49,12 @@ from errors import EmptyDocumentError, NoDocumentsIndexed
 # How much of a passage the Sources panel shows before trimming it. Long enough
 # to recognise the passage, short enough that four of them still fit on screen.
 EXCERPT_LIMIT = 200
+
+# How much of a document's first passage goes into its DOCUMENT line. A title
+# page's opening holds the title, the authors and their affiliations; 400
+# characters fits two authors' affiliations where 200 cut the second one off.
+# It never needs to exceed `chunk_size`, since it is taken from one chunk.
+OPENING_TEXT_LIMIT = 400
 
 
 @dataclass(frozen=True)
@@ -86,16 +94,23 @@ class RagPipeline:
 
     def __init__(
         self,
+        config: AppConfig,
         loader_factory: LoaderFactory,
         splitter: TextSplitter,
         vector_store: VectorStore,
         provider: LLMProvider,
     ):
+        self._config = config
         self._loader_factory = loader_factory
         self._splitter = splitter
         self._vector_store = vector_store
         self._provider = provider
         self._last_sources: tuple[Chunk, ...] = ()
+        # One DOCUMENT line per ingested file, keyed by its name. Kept here
+        # rather than in the index so it needs no embedding and cannot lose a
+        # similarity contest; `ask` sends only the lines of files the store
+        # still holds, so a file removed from the store drops out with it.
+        self._document_lines: dict[str, str] = {}
 
     # ── Making a document answerable ──────────────────────────────────────────
 
@@ -119,13 +134,17 @@ class RagPipeline:
 
         chunks = self._splitter.split(document)
         if not chunks:
-            # A document with text but no chunks should not be reachable; saying
-            # so plainly beats indexing nothing and reporting success.
+            # The file had text, but none of it was a passage worth indexing —
+            # nothing but page numbers or stray symbols. Saying so plainly beats
+            # indexing nothing and reporting success.
             raise EmptyDocumentError(document.name)
 
         # `add` builds the index when there is nothing to add to, so the first
         # upload and the tenth are the same call here.
         self._vector_store.add(chunks)
+        self._document_lines[document.name] = self._describe_document(
+            document, chunks[0]
+        )
 
         return IngestReport(
             document_name=document.name,
@@ -165,7 +184,14 @@ class RagPipeline:
         chunks = self._vector_store.search(question)
         self._last_sources = tuple(chunks)
 
-        prompt = self.build_rag_prompt(self.build_context_block(chunks), question)
+        # The DOCUMENT lines go first and do not depend on the question, so
+        # "what is this paper called?" is answerable even when the title page
+        # ranks nowhere near the top passages.
+        documents = self.build_documents_block()
+        passages = self.build_context_block(chunks)
+        context = f"{documents}\n\n---\n\n{passages}" if documents else passages
+
+        prompt = self.build_rag_prompt(context, question)
         return self._provider.stream_answer(prompt)
 
     @property
@@ -202,6 +228,41 @@ class RagPipeline:
             blocks.append(f"[{index}] {self.format_citation(chunk)}\n{chunk.text}")
         return "\n\n---\n\n".join(blocks)
 
+    def build_documents_block(self) -> str:
+        """
+        One line per document the store currently holds, saying what it is:
+
+            DOCUMENT: paper.pdf — Title: Attention Is All You Need — Authors: … — Opening lines: …
+
+        Only files ingested through this pipeline have a line; an empty string
+        means there is nothing to describe.
+        """
+        return "\n".join(
+            self._document_lines[name]
+            for name in self._vector_store.sources
+            if name in self._document_lines
+        )
+
+    def _describe_document(self, document: Document, first_chunk: Chunk) -> str:
+        """
+        The DOCUMENT line for one file: its name, the title and authors it
+        declares, and the opening of its first passage. The opening is added
+        even when both are declared, because it carries what the metadata
+        fields never do, such as the authors' affiliations.
+        """
+        parts = [f"DOCUMENT: {document.name}"]
+        if document.metadata.title:
+            parts.append(f"Title: {document.metadata.title}")
+        if document.metadata.authors:
+            parts.append(f"Authors: {document.metadata.authors}")
+
+        opening = " ".join(first_chunk.text.split())
+        if len(opening) > OPENING_TEXT_LIMIT:
+            opening = opening[:OPENING_TEXT_LIMIT].rstrip() + "…"
+        parts.append(f"Opening lines: {opening}")
+
+        return " — ".join(parts)
+
     def format_sources_markdown(self, chunks: Sequence[Chunk] | None = None) -> str:
         """
         The "Sources" list shown under an answer in the UI, matching the [n]
@@ -227,18 +288,24 @@ class RagPipeline:
         """
         Builds the full prompt that gets sent to the LLM.
 
-        The prompt has three parts:
+        The prompt has four parts:
         1. Instruction — tells the model its role and rules, citations included
-        2. Context     — the numbered passages retrieved from the vector store
+        2. Context     — a DOCUMENT line per file, then the numbered passages
+                         retrieved from the vector store
         3. Question    — the user's actual question
+        4. Language    — which language to answer in, picked from the question's
+                         alphabet and placed right before ANSWER:, the only spot
+                         where llama3 reliably obeys it
         """
+        language = self._answer_language_for(question)
         prompt = f"""You are a helpful assistant that answers questions strictly based on the provided document context.
 
 Rules:
 - Only use information from the CONTEXT below to answer.
+- Lines starting with DOCUMENT: give each file's name, its title and authors when declared, and its opening lines. Use them for questions about the document itself, such as its title, authors or the authors' affiliations.
 - Each passage is labelled [n] with its source file and page number.
 - Cite the passages you used inline, e.g. "the deadline is March 1 [1]".
-- If the answer is not in the context, say "I couldn't find that information in the document."
+- If the answer is not in the context, say "{language.not_found_message}"
 - Be concise and direct.
 - Do not make up information, and never cite a passage number that is not listed below.
 
@@ -248,6 +315,29 @@ CONTEXT:
 QUESTION:
 {question}
 
+{language.instruction}
+
 ANSWER:"""
 
         return prompt
+
+    def _answer_language_for(self, question: str) -> AnswerLanguage:
+        """
+        Macedonian when most of the question's letters are Cyrillic, otherwise
+        English — including a question with no letters or an even split, since
+        English is what llama3 falls back to anyway.
+        """
+        cyrillic_letters = 0
+        latin_letters = 0
+        for character in question:
+            if not character.isalpha():
+                continue
+            unicode_name = unicodedata.name(character, "")
+            if unicode_name.startswith("CYRILLIC"):
+                cyrillic_letters += 1
+            elif unicode_name.startswith("LATIN"):
+                latin_letters += 1
+
+        if cyrillic_letters > latin_letters:
+            return self._config.macedonian
+        return self._config.english

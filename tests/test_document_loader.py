@@ -15,7 +15,7 @@ import pytest
 import ocr
 from documind.config import AppConfig
 from documind.documents.document_loader import DocumentLoader
-from documind.documents.models import Document, ExtractedPage
+from documind.documents.models import Document, DocumentMetadata, ExtractedPage
 from documind.documents.pdf_loader import PdfLoader
 from documind.documents.text_loader import TextLoader
 from errors import (
@@ -325,7 +325,37 @@ def test_scanned_page_count_counts_only_pages_without_a_text_layer(make_pdf):
     assert PdfLoader(AppConfig()).scanned_page_count(pdf) == 2
 
 
+def test_a_pdf_brings_its_declared_title_and_author(make_pdf):
+    pdf = make_pdf(["body text"], title="Deep Residual Learning", author="K. He, X. Zhang")
+
+    document = PdfLoader(AppConfig()).load(pdf)
+
+    assert document.metadata == DocumentMetadata(
+        title="Deep Residual Learning", authors="K. He, X. Zhang"
+    )
+
+
+def test_a_pdf_that_declares_nothing_has_empty_metadata(make_pdf):
+    document = PdfLoader(AppConfig()).load(make_pdf(["body text"]))
+
+    assert document.metadata == DocumentMetadata()
+
+
+def test_reading_the_metadata_does_not_disturb_the_pages(make_pdf):
+    pdf = make_pdf(["Alpha", "Beta"], title="A Title")
+
+    document = PdfLoader(AppConfig()).load(pdf)
+
+    assert [page.text for page in document.pages] == ["Alpha", "Beta"]
+
+
 # ── TextLoader: the one step it does differently ───────────────────────────────
+
+def test_a_text_file_declares_no_metadata(make_txt):
+    document = TextLoader(AppConfig()).load(make_txt("A Title\nby Someone"))
+
+    assert document.metadata == DocumentMetadata()
+
 
 def test_a_text_file_is_one_page(make_txt):
     document = TextLoader(AppConfig()).load(make_txt("line one\nline two"))

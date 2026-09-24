@@ -46,7 +46,7 @@ def app_with_ollama_ready(monkeypatch):
     monkeypatch.setattr(
         errors.ollama,
         "list",
-        lambda: FakeListResponse(["llama3", "nomic-embed-text", "llava"]),
+        lambda: FakeListResponse(["llama3", "nomic-embed-text-v2-moe", "llava"]),
     )
     return AppTest.from_file(APP, default_timeout=60)
 
@@ -144,7 +144,7 @@ def test_one_status_panel_covers_every_model_the_app_needs(app_with_ollama_ready
     at = app_with_ollama_ready.run()
 
     message = next(s.value for s in at.success if "Ollama is running" in s.value)
-    for model in ("llava", "llama3", "nomic-embed-text"):
+    for model in ("llava", "llama3", "nomic-embed-text-v2-moe"):
         assert model in message
 
 
@@ -329,3 +329,71 @@ def test_clearing_documents_empties_the_uploader_so_nothing_is_reindexed(pdf_mod
     assert at.session_state.vector_store.sources == ()
     assert at.session_state.vector_store.is_ready is False
     assert not at.file_uploader[0].value
+
+
+# ── One reset per mode, in the sidebar where it stays visible ─────────────────
+
+def _sidebar_clear_button(at: AppTest):
+    return next(b for b in at.sidebar.button if "Clear" in b.label)
+
+
+def test_the_sidebar_clear_button_is_labelled_for_chat_mode(app_with_ollama_ready):
+    at = app_with_ollama_ready.run()
+
+    assert _sidebar_clear_button(at).label == "🗑️ Clear chat"
+
+
+def test_the_sidebar_clear_button_is_labelled_for_pdf_mode(pdf_mode_app):
+    assert _sidebar_clear_button(pdf_mode_app).label == "🗑️ Clear documents & chat"
+
+
+def test_clearing_in_chat_mode_empties_the_chat(app_with_ollama_ready):
+    at = app_with_ollama_ready.run()
+    at.session_state.chat_session.add_user("an earlier question")
+
+    at = _sidebar_clear_button(at).click().run()
+
+    assert not at.exception
+    assert at.session_state.chat_session.is_empty
+
+
+def test_clearing_in_pdf_mode_drops_the_documents_and_the_answers(pdf_mode_app):
+    """
+    The PDF reset used to sit inside the Documents panel, which collapses once
+    a file is indexed, so the only visible clear button — the sidebar's — left
+    PDF Q&A untouched.
+    """
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF]).run()
+    at.session_state.pdf_chat_history = [
+        {"role": "user", "content": "earlier question", "sources": None}
+    ]
+    uploader_key_before = at.session_state.pdf_uploader_key
+
+    at = _sidebar_clear_button(at).click().run()
+
+    assert not at.exception
+    assert at.session_state.pdf_chat_history == []
+    assert at.session_state.vector_store.sources == ()
+    assert at.session_state.vector_store.is_ready is False
+    assert at.session_state.pdf_uploader_key == uploader_key_before + 1
+
+
+def test_clearing_in_pdf_mode_returns_the_page_to_its_first_open_state(pdf_mode_app):
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF]).run()
+
+    at = _sidebar_clear_button(at).click().run()
+
+    assert not at.exception
+    documents_panel = next(e for e in at.expander if e.label.startswith("📎"))
+    assert documents_panel.label == "📎 Upload documents"
+    assert documents_panel.proto.expanded
+    assert at.chat_input[0].proto.disabled
+    assert "Upload a PDF above" in at.chat_input[0].placeholder
+
+
+def test_the_documents_panel_has_no_clear_button_of_its_own(pdf_mode_app):
+    at = pdf_mode_app.file_uploader[0].set_value([FINANCE_PDF]).run()
+
+    documents_panel = next(e for e in at.expander if e.label.startswith("📎"))
+    assert not [b for b in documents_panel.button if "Clear" in b.label]
+    assert len([b for b in at.button if "Clear" in b.label]) == 1

@@ -65,7 +65,7 @@ Split each page into Chunks    (LangChain RecursiveCharacterTextSplitter)
     │                           each chunk tagged {source: file.pdf, page: n}
     │                                             → TextSplitter
     ▼
-Embed Chunks                   (nomic-embed-text via Ollama)
+Embed Chunks                   (nomic-embed-text-v2-moe via Ollama)
     │                                             → VectorStore
     ▼
 Store in FAISS                 (local vector database, all PDFs in one index)
@@ -149,7 +149,7 @@ docker compose up
 ```
 
 That's the whole setup. Compose starts Ollama, pulls `llama3`,
-`nomic-embed-text` and `llava` into a cached volume, waits until they're
+`nomic-embed-text-v2-moe` and `llava` into a cached volume, waits until they're
 actually present, then serves the app at
 [http://localhost:8501](http://localhost:8501).
 
@@ -218,11 +218,11 @@ ollama pull mistral      # alternative text model
 
 # For the PDF Q&A tab (both required)
 ollama pull llama3             # answers questions about the document
-ollama pull nomic-embed-text   # converts text to vectors for FAISS
+ollama pull nomic-embed-text-v2-moe   # converts text to vectors for FAISS
 ```
 
 > **Why two models for PDF Q&A?**
-> `nomic-embed-text` is a tiny, fast model whose only job is turning text into numbers (vectors) so FAISS can search by similarity. `llama3` is the model that actually reads the retrieved chunks and writes the answer.
+> `nomic-embed-text-v2-moe` is a small, multilingual model (English and Macedonian alike) whose only job is turning text into numbers (vectors) so FAISS can search by similarity. `llama3` is the model that actually reads the retrieved chunks and writes the answer.
 
 #### 6 — Run the app
 
@@ -301,7 +301,7 @@ All settings live in the `AppConfig` class in `documind/config.py`. `app.py` bui
 | `available_models` | `(llama3, mistral, phi3, llava)` | Models shown in the sidebar dropdown |
 | `vision_model` | `llava` | Model used when an image is attached |
 | `answer_model` | `llama3` | Model that answers PDF questions |
-| `embedding_model` | `nomic-embed-text` | Model that turns chunks into vectors |
+| `embedding_model` | `nomic-embed-text-v2-moe` | Model that turns chunks into vectors |
 | `chunk_size` / `chunk_overlap` | `500` / `50` | How PDF pages are split for indexing |
 | `retrieval_k` / `retrieval_k_multi_document` | `4` / `6` | Chunks retrieved per question |
 | `temperature` | `0.7` | Creativity (0 = deterministic, 1 = creative) |
@@ -319,7 +319,7 @@ All settings live in the `AppConfig` class in `documind/config.py`. `app.py` bui
 | `llama3` | Text | PDF Q&A tab — document answering |
 | `mistral` | Text | Chat tab — fast general responses |
 | `phi3` | Text | Chat tab — lightweight, low RAM |
-| `nomic-embed-text` | Embeddings only | PDF Q&A tab — FAISS indexing |
+| `nomic-embed-text-v2-moe` | Embeddings only | PDF Q&A tab — FAISS indexing |
 
 ---
 
@@ -347,7 +347,7 @@ See `requirements.txt` for the full pinned list.
 
 - [x] Local chat with text LLMs (Mistral, Llama3, Phi3)
 - [x] Image Q&A with LLaVA
-- [x] PDF Q&A with RAG pipeline (FAISS + nomic-embed-text + llama3)
+- [x] PDF Q&A with RAG pipeline (FAISS + nomic-embed-text-v2-moe + llama3)
 - [x] Multi-document support (query across several PDFs at once)
 - [x] Source citation with page number references
 - [x] Automated test suite (pytest, runs without a live model)

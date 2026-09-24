@@ -17,13 +17,13 @@ import io
 
 import pytest
 
-from documind.config import AppConfig
+from documind.config import AnswerLanguage, AppConfig
 from documind.documents.loader_factory import LoaderFactory
 from documind.documents.models import Chunk
 from documind.documents.pdf_loader import PdfLoader
 from documind.documents.text_splitter import TextSplitter
 from documind.llm.llm_provider import LLMProvider
-from documind.rag.rag_pipeline import IngestReport, RagPipeline
+from documind.rag.rag_pipeline import OPENING_TEXT_LIMIT, IngestReport, RagPipeline
 from documind.rag.vector_store import VectorStore
 from errors import (
     EmptyDocumentError,
@@ -81,6 +81,7 @@ def provider():
 def pipeline(provider, fake_embeddings):
     config = AppConfig()
     return RagPipeline(
+        config=config,
         loader_factory=LoaderFactory(config),
         splitter=TextSplitter(config),
         vector_store=VectorStore(config, embeddings=fake_embeddings),
@@ -147,6 +148,7 @@ def test_a_report_without_ocr_has_no_ocr_confidences(pipeline, make_pdf):
 def _pipeline_reading_scans_with(ocr_engine, provider, fake_embeddings) -> RagPipeline:
     config = AppConfig()
     return RagPipeline(
+        config=config,
         loader_factory=PdfLoaderFactoryWithOcr(config, ocr_engine),
         splitter=TextSplitter(config),
         vector_store=VectorStore(config, embeddings=fake_embeddings),
@@ -303,6 +305,129 @@ def test_retrieval_happens_before_the_first_token(pipeline, make_pdf):
     assert list(stream)
 
 
+# ── Saying what each document is, whatever the question ───────────────────────
+
+def test_the_prompt_names_each_document_with_its_declared_title_and_authors(
+    pipeline, provider, make_pdf
+):
+    pipeline.ingest(
+        make_pdf(
+            ["the deadline is March first"],
+            name="paper.pdf",
+            title="Deep Residual Learning",
+            author="K. He, X. Zhang",
+        )
+    )
+
+    list(pipeline.ask("When is the deadline?"))
+
+    assert (
+        "DOCUMENT: paper.pdf — Title: Deep Residual Learning — Authors: K. He, X. Zhang"
+        in provider.prompts[0]
+    )
+
+
+def test_declared_title_and_authors_still_come_with_the_opening_lines(
+    pipeline, make_pdf
+):
+    # The failure this exists for: "What is the first author's affiliation?"
+    # The affiliation is on the title page, never in the Title/Author fields.
+    pipeline.ingest(
+        make_pdf(
+            ["Deep Residual Learning\nK. He, Microsoft Research"],
+            name="paper.pdf",
+            title="Deep Residual Learning",
+            author="K. He",
+        )
+    )
+
+    assert pipeline.build_documents_block() == (
+        "DOCUMENT: paper.pdf — Title: Deep Residual Learning — Authors: K. He"
+        " — Opening lines: Deep Residual Learning K. He, Microsoft Research"
+    )
+
+
+def test_the_title_reaches_the_prompt_even_when_its_page_is_not_retrieved(
+    pipeline, provider, make_pdf
+):
+    # The failure this exists for: the title page lost the similarity contest
+    # to passages that merely shared more words with the question.
+    pages = ["Deep Residual Learning\nK. He"] + [
+        f"what is the title of this paper {n}" for n in range(8)
+    ]
+    pipeline.ingest(make_pdf(pages, name="paper.pdf"))
+
+    list(pipeline.ask("what is the title of this paper"))
+
+    assert all(source.page_number != 1 for source in pipeline.last_sources)
+    assert "Opening lines: Deep Residual Learning K. He" in provider.prompts[0]
+
+
+def test_without_declared_metadata_the_opening_lines_stand_in(pipeline, make_pdf):
+    pipeline.ingest(make_pdf(["Deep Residual Learning\nK. He, X. Zhang"], name="p.pdf"))
+
+    assert pipeline.build_documents_block() == (
+        "DOCUMENT: p.pdf — Opening lines: Deep Residual Learning K. He, X. Zhang"
+    )
+
+
+def test_a_declared_title_without_authors_still_adds_the_opening_lines(
+    pipeline, make_pdf
+):
+    pipeline.ingest(make_pdf(["Deep Residual Learning\nK. He"], name="p.pdf", title="ResNet"))
+
+    assert pipeline.build_documents_block() == (
+        "DOCUMENT: p.pdf — Title: ResNet — Opening lines: Deep Residual Learning K. He"
+    )
+
+
+def test_long_opening_lines_are_trimmed_to_the_opening_text_limit(pipeline, make_pdf):
+    # Six-character words put a letter, not a space, at the cut, so trimming
+    # the trailing whitespace leaves exactly OPENING_TEXT_LIMIT characters.
+    pipeline.ingest(make_pdf(["words " * 100], name="p.pdf"))
+
+    opening = pipeline.build_documents_block().split("Opening lines: ", 1)[1]
+
+    assert opening.endswith("…")
+    assert len(opening.removesuffix("…")) == OPENING_TEXT_LIMIT
+
+
+def test_opening_lines_shorter_than_the_limit_are_kept_whole(pipeline, make_pdf):
+    pipeline.ingest(make_pdf(["Budget 2026"], name="p.pdf", title="Budget", author="A"))
+
+    assert pipeline.build_documents_block() == (
+        "DOCUMENT: p.pdf — Title: Budget — Authors: A — Opening lines: Budget 2026"
+    )
+
+
+def test_every_indexed_document_gets_its_own_line(pipeline, make_pdf):
+    pipeline.ingest(make_pdf(["budget text"], name="finance.pdf", title="Budget", author="A"))
+    pipeline.ingest(make_pdf(["safety text"], name="safety.pdf", title="Safety", author="B"))
+
+    assert pipeline.build_documents_block().splitlines() == [
+        "DOCUMENT: finance.pdf — Title: Budget — Authors: A — Opening lines: budget text",
+        "DOCUMENT: safety.pdf — Title: Safety — Authors: B — Opening lines: safety text",
+    ]
+
+
+def test_a_document_removed_from_the_store_is_no_longer_described(pipeline, make_pdf):
+    pipeline.ingest(make_pdf(["budget text"], name="finance.pdf", title="Budget", author="A"))
+    pipeline.ingest(make_pdf(["safety text"], name="safety.pdf", title="Safety", author="B"))
+
+    pipeline._vector_store.remove("finance.pdf")
+
+    assert pipeline.build_documents_block() == (
+        "DOCUMENT: safety.pdf — Title: Safety — Authors: B — Opening lines: safety text"
+    )
+
+
+def test_the_prompt_tells_the_model_what_the_document_lines_are_for(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "question")
+
+    assert "Lines starting with DOCUMENT:" in prompt
+    assert "affiliations" in prompt
+
+
 # ── The sources of the last answer ────────────────────────────────────────────
 
 def test_there_are_no_sources_before_the_first_question(pipeline):
@@ -434,6 +559,83 @@ def test_prompt_carries_context_question_and_the_citation_rule(pipeline):
     assert "I couldn't find that information in the document." in prompt
 
 
+# ── Answering in the question's language ──────────────────────────────────────
+
+def test_a_cyrillic_question_asks_for_a_macedonian_answer(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "Колку е висок кошот?")
+
+    assert AppConfig().macedonian.instruction in prompt
+    assert AppConfig().english.instruction not in prompt
+
+
+def test_a_latin_question_asks_for_an_english_answer(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "How high is the basket?")
+
+    assert AppConfig().english.instruction in prompt
+    assert AppConfig().macedonian.instruction not in prompt
+
+
+def test_the_language_instruction_sits_directly_before_answer(pipeline):
+    # llama3 ignored the same request when it sat up in the rules; only right
+    # before ANSWER: was it followed (DECISIONS.md #21).
+    prompt = pipeline.build_rag_prompt("context", "Колку е висок кошот?")
+
+    assert prompt.endswith(f"{AppConfig().macedonian.instruction}\n\nANSWER:")
+
+
+def test_a_mostly_cyrillic_question_with_a_latin_term_is_still_macedonian(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "Што е FIBA и кога е основана?")
+
+    assert AppConfig().macedonian.instruction in prompt
+
+
+def test_a_question_with_no_letters_defaults_to_english(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "1 + 1 = ?")
+
+    assert AppConfig().english.instruction in prompt
+
+
+def test_an_even_split_of_alphabets_defaults_to_english(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "abc где")
+
+    assert AppConfig().english.instruction in prompt
+
+
+def test_a_macedonian_question_gets_the_not_found_message_in_macedonian(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "Колку е висок кошот?")
+
+    assert AppConfig().macedonian.not_found_message in prompt
+    assert AppConfig().english.not_found_message not in prompt
+
+
+def test_an_english_question_gets_the_not_found_message_in_english(pipeline):
+    prompt = pipeline.build_rag_prompt("context", "How high is the basket?")
+
+    assert AppConfig().english.not_found_message in prompt
+    assert AppConfig().macedonian.not_found_message not in prompt
+
+
+def test_the_answer_languages_come_from_the_config(provider, fake_embeddings):
+    config = dataclasses.replace(
+        AppConfig(),
+        macedonian=AnswerLanguage(
+            instruction="CUSTOM MK INSTRUCTION", not_found_message="CUSTOM MK MISSING"
+        ),
+    )
+    pipeline = RagPipeline(
+        config=config,
+        loader_factory=LoaderFactory(config),
+        splitter=TextSplitter(config),
+        vector_store=VectorStore(config, embeddings=fake_embeddings),
+        provider=provider,
+    )
+
+    prompt = pipeline.build_rag_prompt("context", "Колку е висок кошот?")
+
+    assert "CUSTOM MK INSTRUCTION" in prompt
+    assert "CUSTOM MK MISSING" in prompt
+
+
 # ── The whole thing, end to end ───────────────────────────────────────────────
 
 def test_a_real_pdf_becomes_a_cited_answer(fake_embeddings, make_pdf):
@@ -444,6 +646,7 @@ def test_a_real_pdf_becomes_a_cited_answer(fake_embeddings, make_pdf):
     config = AppConfig()
     provider = FakeProvider(tokens=["The deadline is March first [1]."])
     pipeline = RagPipeline(
+        config=config,
         loader_factory=LoaderFactory(config),
         splitter=TextSplitter(config),
         vector_store=VectorStore(config, embeddings=fake_embeddings),
@@ -468,6 +671,7 @@ def test_two_documents_are_answered_from_together(fake_embeddings, make_pdf):
     config = AppConfig()
     provider = FakeProvider()
     pipeline = RagPipeline(
+        config=config,
         loader_factory=LoaderFactory(config),
         splitter=TextSplitter(config),
         vector_store=VectorStore(config, embeddings=fake_embeddings),

@@ -69,11 +69,29 @@ def build_pipeline(vector_store: VectorStore, provider: OllamaProvider) -> RagPi
     pipeline is rebuilt around it without re-indexing anything.
     """
     return RagPipeline(
+        config=config,
         loader_factory=LoaderFactory(config),
         splitter=TextSplitter(config),
         vector_store=vector_store,
         provider=provider,
     )
+
+
+def reset_pdf_mode() -> None:
+    """
+    Returns PDF Q&A to the state it opens in: no indexed documents, no answers,
+    and an empty uploader. The caller reruns the script to redraw the page.
+    """
+    # A fresh index, and a pipeline pointed at it.
+    st.session_state.vector_store = VectorStore(config)
+    st.session_state.pipeline = build_pipeline(
+        st.session_state.vector_store, st.session_state.provider
+    )
+    st.session_state.pdf_chat_history = []
+    # Without a new key the uploader would still hold the cleared files, and
+    # the next run would index them all over again.
+    st.session_state.pdf_uploader_key += 1
+    st.session_state.pdf_uploader_names = set()
 
 
 def show_error(exc: Exception, filename: str | None = None) -> None:
@@ -179,6 +197,20 @@ if "pdf_uploader_key" not in st.session_state:
     st.session_state.pdf_uploader_key = 0
 
 
+# ── Mode selector ──────────────────────────────────────────────────────────────
+# Chosen before the sidebar is drawn, because the sidebar's clear button resets
+# whichever mode is showing. The sidebar is its own container, so the selector
+# still appears directly under the title.
+mode = st.segmented_control(
+    "Mode",
+    options=[CHAT_MODE, PDF_MODE],
+    default=CHAT_MODE,
+    label_visibility="collapsed",
+)
+# A segmented control can be deselected; fall back rather than render nothing.
+mode = mode or CHAT_MODE
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR — shared by both modes, so the status check appears exactly once
 # ══════════════════════════════════════════════════════════════════════════════
@@ -215,8 +247,14 @@ with st.sidebar:
         st.image(uploaded_image, use_container_width=True)
 
     st.markdown("---")
-    if st.button("🗑️ Clear chat", use_container_width=True):
-        st.session_state.chat_session.clear()
+    # The PDF reset lives here rather than in the Documents panel, which
+    # collapses once a file is indexed and would hide the button with it.
+    clear_label = "🗑️ Clear documents & chat" if mode == PDF_MODE else "🗑️ Clear chat"
+    if st.button(clear_label, use_container_width=True):
+        if mode == PDF_MODE:
+            reset_pdf_mode()
+        else:
+            st.session_state.chat_session.clear()
         st.rerun()
 
     has_history = not st.session_state.chat_session.is_empty
@@ -231,17 +269,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("Running 100% locally via Ollama 🔒")
-
-
-# ── Mode selector ──────────────────────────────────────────────────────────────
-mode = st.segmented_control(
-    "Mode",
-    options=[CHAT_MODE, PDF_MODE],
-    default=CHAT_MODE,
-    label_visibility="collapsed",
-)
-# A segmented control can be deselected; fall back rather than render nothing.
-mode = mode or CHAT_MODE
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -346,18 +373,6 @@ else:
                     f"`{name}`" for name in st.session_state.vector_store.sources
                 )
             )
-            if st.button("🗑️ Clear documents & chat", use_container_width=True):
-                # A fresh index, and a pipeline pointed at it.
-                st.session_state.vector_store = VectorStore(config)
-                st.session_state.pipeline = build_pipeline(
-                    st.session_state.vector_store, st.session_state.provider
-                )
-                st.session_state.pdf_chat_history = []
-                # Without a new key the uploader would still hold the cleared
-                # files, and the next run would index them all over again.
-                st.session_state.pdf_uploader_key += 1
-                st.session_state.pdf_uploader_names = set()
-                st.rerun()
 
     if not st.session_state.pdf_chat_history:
         st.caption(

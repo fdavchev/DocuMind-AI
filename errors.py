@@ -29,7 +29,7 @@ MAX_PDF_MB = 25
 
 # The models each tab needs, so the readiness check can name the missing one.
 CHAT_MODELS = ["llava"]
-PDF_MODELS = ["llama3", "nomic-embed-text"]
+PDF_MODELS = ["llama3", "nomic-embed-text-v2-moe"]
 
 # ollama.list() wraps connection failures in a plain ConnectionError, but a
 # streaming ollama.chat() connects lazily and surfaces the raw httpx error.

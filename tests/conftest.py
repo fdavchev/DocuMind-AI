@@ -34,10 +34,13 @@ def _escape(text: str) -> str:
     return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
 
-def build_pdf_bytes(pages: list[str]) -> bytes:
+def build_pdf_bytes(
+    pages: list[str], title: str | None = None, author: str | None = None
+) -> bytes:
     """
     Returns the bytes of a valid PDF, one page per entry in `pages`.
     Newlines inside a page become separate text lines on that page.
+    `title` and `author`, when given, go into the PDF's document properties.
     """
     objects: list[bytes] = []          # objects[i] is object number i + 1
     page_object_numbers: list[int] = []
@@ -71,6 +74,15 @@ def build_pdf_bytes(pages: list[str]) -> bytes:
         + str(len(page_object_numbers)).encode() + b" >>"
     )
 
+    info_reference = b""
+    properties = {"Title": title, "Author": author}
+    entries = "".join(
+        f"/{key} ({_escape(value)}) " for key, value in properties.items() if value
+    )
+    if entries:
+        objects.append(f"<< {entries}>>".encode("latin-1"))
+        info_reference = b" /Info " + str(len(objects)).encode() + b" 0 R"
+
     out = bytearray(b"%PDF-1.4\n")
     offsets: list[int] = []
     for number, body in enumerate(objects, start=1):
@@ -84,7 +96,7 @@ def build_pdf_bytes(pages: list[str]) -> bytes:
         out += f"{offset:010d} 00000 n \n".encode()
     out += (
         b"trailer\n<< /Size " + str(len(objects) + 1).encode()
-        + b" /Root 1 0 R >>\nstartxref\n"
+        + b" /Root 1 0 R" + info_reference + b" >>\nstartxref\n"
         + str(xref_offset).encode() + b"\n%%EOF\n"
     )
     return bytes(out)
@@ -100,10 +112,15 @@ class UploadedPdf(io.BytesIO):
 
 @pytest.fixture
 def make_pdf():
-    """make_pdf(["page one text", "page two text"], name="report.pdf")"""
+    """make_pdf(["page one text", "page two text"], name="report.pdf", title="…")"""
 
-    def _make(pages: list[str], name: str = "test.pdf") -> UploadedPdf:
-        return UploadedPdf(build_pdf_bytes(pages), name)
+    def _make(
+        pages: list[str],
+        name: str = "test.pdf",
+        title: str | None = None,
+        author: str | None = None,
+    ) -> UploadedPdf:
+        return UploadedPdf(build_pdf_bytes(pages, title=title, author=author), name)
 
     return _make
 

@@ -1,9 +1,10 @@
 # documind/documents/models.py
 #
 # WHAT THIS FILE DOES:
-# Defines the three small objects the document pipeline passes around:
+# Defines the small objects the document pipeline passes around:
 #   ExtractedPage — one page of a PDF after extraction
 #   Document      — a whole uploaded file: its name plus every page read from it
+#                   (and DocumentMetadata, the title and authors it declares)
 #   Chunk         — one retrievable passage, tagged with the page it came from
 #
 # WHY OBJECTS INSTEAD OF TUPLES AND DICTIONARIES:
@@ -49,9 +50,23 @@ class ExtractedPage:
 
 
 @dataclass(frozen=True)
+class DocumentMetadata:
+    """
+    What a file says about itself, as opposed to what its pages say.
+
+    A PDF can carry a title and an author in its document properties; a plain
+    text file carries neither. An empty string means the file did not say.
+    """
+
+    title: str = ""
+    authors: str = ""
+
+
+@dataclass(frozen=True)
 class Document:
     """
-    A whole uploaded document: the filename it arrived under and its pages.
+    A whole uploaded document: the filename it arrived under, its pages, and
+    the title and authors the file declares, if any.
 
     `pages` is a tuple rather than a list so the frozen document cannot be
     mutated through it.
@@ -59,6 +74,7 @@ class Document:
 
     name: str
     pages: tuple[ExtractedPage, ...]
+    metadata: DocumentMetadata = DocumentMetadata()
 
     @property
     def text(self) -> str:
