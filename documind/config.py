@@ -38,6 +38,11 @@ class AppConfig:
     # Turns text into vectors for FAISS. It has no LLM capability of its own.
     embedding_model: str = "nomic-embed-text"
 
+    # How many chunks go to the embedding model in one request. A single request
+    # carrying hundreds of texts intermittently fails against a local Ollama on
+    # Windows; batches of 64 were measured reliable (DECISIONS.md #17).
+    embedding_batch_size: int = 64
+
     chunk_size: int = 500
     chunk_overlap: int = 50
 

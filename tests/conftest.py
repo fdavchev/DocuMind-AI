@@ -11,6 +11,7 @@ running Ollama or a checked-in binary sample:
    similarity search without a live model.
 """
 
+import hashlib
 import io
 import math
 import sys
@@ -119,11 +120,17 @@ class FakeEmbeddings(Embeddings):
     dimensions = 64
 
     def _vector(self, text: str) -> list[float]:
+        # Python's built-in hash() is randomised per process (PYTHONHASHSEED),
+        # so it isn't actually deterministic across test runs even though it
+        # looks like it should be — a word could land in a different bucket
+        # from one `pytest` invocation to the next, occasionally flipping
+        # which document ranks first. md5 has no such randomisation.
         vector = [0.0] * self.dimensions
         for word in text.lower().split():
             cleaned = "".join(ch for ch in word if ch.isalnum())
             if cleaned:
-                vector[hash(cleaned) % self.dimensions] += 1.0
+                bucket = int(hashlib.md5(cleaned.encode()).hexdigest(), 16) % self.dimensions
+                vector[bucket] += 1.0
         norm = math.sqrt(sum(value * value for value in vector))
         return [value / norm for value in vector] if norm else vector
 

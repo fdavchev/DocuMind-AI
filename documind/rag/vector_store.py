@@ -72,10 +72,15 @@ class VectorStore:
         Embeds every chunk into a brand new index, replacing anything held.
 
         This is the first upload's path; it takes a few seconds to half a minute
-        depending on the document's length and the machine.
+        depending on the document's length and the machine. The chunks reach the
+        embedding model in batches (see `_embed_in_batches`), but the index is
+        only replaced once every batch has succeeded.
         """
-        self._store = FAISS.from_documents(
-            documents=self._as_documents(chunks), embedding=self._resolve_embeddings()
+        documents = self._as_documents(chunks)
+        self._store = FAISS.from_embeddings(
+            text_embeddings=self._embed_in_batches(documents),
+            embedding=self._resolve_embeddings(),
+            metadatas=[document.metadata for document in documents],
         )
 
     def add(self, chunks: Sequence[Chunk]) -> None:
@@ -88,12 +93,20 @@ class VectorStore:
         builds it, so a caller never has to ask whether this upload is the first
         one — that question was the one branch the old procedural upload handler
         could get wrong.
+
+        Like `build`, it embeds in batches and changes the index only after the
+        last batch succeeds, so a failed upload leaves no partial document
+        behind.
         """
         if self._store is None:
             self.build(chunks)
             return
 
-        self._store.add_documents(self._as_documents(chunks))
+        documents = self._as_documents(chunks)
+        self._store.add_embeddings(
+            text_embeddings=self._embed_in_batches(documents),
+            metadatas=[document.metadata for document in documents],
+        )
 
     def remove(self, source_name: str) -> None:
         """
@@ -181,6 +194,27 @@ class VectorStore:
             )
             for chunk in chunks
         ]
+
+    def _embed_in_batches(
+        self, documents: list[Document]
+    ) -> list[tuple[str, list[float]]]:
+        """
+        Each document's text paired with its vector, embedded a batch at a time.
+
+        One request carrying hundreds of texts intermittently fails against a
+        local Ollama on Windows, while the same texts sent in batches of 64
+        succeed (DECISIONS.md #17). Only the embedding calls are split: the
+        vectors are collected first and handed to FAISS in one step, so a batch
+        that fails leaves the index exactly as it was.
+        """
+        embeddings = self._resolve_embeddings()
+        batch_size = self._config.embedding_batch_size
+        texts = [document.page_content for document in documents]
+
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(embeddings.embed_documents(texts[start:start + batch_size]))
+        return list(zip(texts, vectors))
 
     def _as_chunk(self, document: Document) -> Chunk:
         """

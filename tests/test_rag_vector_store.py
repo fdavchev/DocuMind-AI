@@ -6,7 +6,10 @@ LangChain Document: Chunks go in and Chunks come back, with their page and
 filename intact.
 """
 
+from dataclasses import replace
+
 import pytest
+from conftest import FakeEmbeddings
 
 from documind.config import AppConfig
 from documind.documents.models import Chunk
@@ -220,6 +223,90 @@ def test_k_comes_from_the_config_it_was_given(fake_embeddings):
     store.add(_many("b.pdf", 8))
 
     assert len(store.search("text")) == 2
+
+
+# ── Embedding in batches ──────────────────────────────────────────────────────
+
+class RecordingEmbeddings(FakeEmbeddings):
+    """FakeEmbeddings that remembers how many texts each embedding call carried."""
+
+    def __init__(self):
+        self.batch_sizes: list[int] = []
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.batch_sizes.append(len(texts))
+        return super().embed_documents(texts)
+
+
+class FailingOnSecondBatchEmbeddings(FakeEmbeddings):
+    """FakeEmbeddings whose second embedding call fails, like a refused request."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        if self.calls == 2:
+            raise ConnectionError("embedding request refused")
+        return super().embed_documents(texts)
+
+
+def _batched_store(embeddings) -> VectorStore:
+    return VectorStore(replace(AppConfig(), embedding_batch_size=2), embeddings=embeddings)
+
+
+def test_build_sends_the_chunks_in_batches_no_larger_than_configured():
+    embeddings = RecordingEmbeddings()
+    store = _batched_store(embeddings)
+
+    store.build(_many("a.pdf", 5))
+
+    assert embeddings.batch_sizes == [2, 2, 1]
+
+
+def test_add_sends_the_chunks_in_batches_no_larger_than_configured():
+    embeddings = RecordingEmbeddings()
+    store = _batched_store(embeddings)
+    store.build(_many("a.pdf", 1))
+    embeddings.batch_sizes.clear()
+
+    store.add(_many("b.pdf", 5))
+
+    assert embeddings.batch_sizes == [2, 2, 1]
+
+
+def test_every_batched_chunk_is_indexed_and_searchable():
+    store = _batched_store(RecordingEmbeddings())
+    first_file, second_file = _many("a.pdf", 5), _many("b.pdf", 5)
+
+    store.build(first_file)
+    store.add(second_file)
+    hits = store.search("text", k=20)
+
+    assert len(hits) == 10
+    assert set(hits) == set(first_file + second_file)
+
+
+def test_a_batched_build_still_replaces_what_was_indexed_before():
+    store = _batched_store(RecordingEmbeddings())
+    store.build(_many("a.pdf", 5))
+
+    store.build(_many("b.pdf", 5))
+
+    assert store.sources == ("b.pdf",)
+    assert len(store.search("text", k=20)) == 5
+
+
+def test_a_batch_that_fails_leaves_the_index_as_it_was():
+    embeddings = FailingOnSecondBatchEmbeddings()
+    store = _batched_store(embeddings)
+    store.build(_many("a.pdf", 2))
+
+    with pytest.raises(ConnectionError):
+        store.add(_many("b.pdf", 5))
+
+    assert store.sources == ("a.pdf",)
+    assert len(store.search("text", k=20)) == 2
 
 
 # ── Which files are indexed ───────────────────────────────────────────────────

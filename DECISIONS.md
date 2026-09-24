@@ -347,3 +347,57 @@ expected to do.
 **Pinned by a test** that asserts the *condition* rather than the symptom:
 `test_the_input_is_top_level_so_streamlit_pins_it` captures the input's ancestor
 block types at creation and fails if it is ever nested again.
+
+---
+
+## 17 — Chunks reach the embedding model in batches of 64
+*2026-09-24*
+
+`VectorStore.build` and `VectorStore.add` no longer hand every chunk to the
+embedding model in one call. `_embed_in_batches` sends them in slices of
+`AppConfig.embedding_batch_size` (64), collects the vectors, and only then gives
+FAISS the whole set in one step (`FAISS.from_embeddings` / `add_embeddings`).
+
+**What prompted it:** uploading the 792-chunk *Working anytime, anywhere* report
+failed with `Ollama returned an error. Post "http://127.0.0.1:<port>/tokenize":
+dial tcp ...: connectex: No connection could be made because the target machine
+actively refused it. (status code: 400)`. Reproduced outside the app with
+LangChain's `OllamaEmbeddings` against Ollama 0.30.2 on Windows (RTX 4060):
+embedding all 792 texts in one call failed 2 times out of 3; the same 792 texts
+in slices of 64 or 128 succeeded 6 times out of 6, about 6 s per full pass.
+Every 128-chunk slice of the document succeeds on its own, so no single chunk is
+at fault — it is the size of the request, and it becomes flaky above a few
+hundred texts. Nothing in our code had changed; this was simply the first
+document with hundreds of chunks.
+
+**Likely mechanism (inferred, not proven):** Ollama fans one `/api/embed`
+request out into one internal request per text, and Windows refuses the
+connections that overflow its pending-connection queue.
+
+**Alternatives considered:**
+- *Upgrade or reconfigure Ollama.* Out of our hands on a user's machine, and
+  with the mechanism unproven there is no version or setting known to fix it.
+  Batching works against the Ollama that is installed today.
+- *No batching, retry on failure.* The full 792-text request failed two times
+  in three, so a retry is close to a coin toss and only hides the cause.
+- *A module-level constant instead of an `AppConfig` field.* Every other tuning
+  value lives in `AppConfig` (see the header of `config.py`), and a config
+  field lets the tests use a batch size of 2 without monkeypatching.
+- *Build from the first batch with `from_documents`, then `add_documents` the
+  rest.* Simpler to read, but a batch that failed halfway would leave a partial
+  index behind: `build` would already have discarded the old one, and `add`
+  would leave part of a document indexed under its name. Because `app.py`
+  only indexes uploads whose name is not yet in `sources`, that file would
+  never be retried and would quietly be answered from part of its pages.
+  Embedding first and inserting once keeps both methods all-or-nothing, as
+  they were before.
+
+**Why 64:** it was measured reliable, and it is the smaller of the two sizes
+that were, which leaves the wider margin below the few hundred texts where
+failures started. The cost is negligible: a full pass of 792 chunks took about
+6 s in slices of 64 or of 128.
+
+**Pinned by tests** in `test_rag_vector_store.py`: embedding calls never carry
+more than the configured batch size, every batched chunk is searchable, a
+batched `build` still replaces the old index, and a failing batch leaves the
+index as it was.
