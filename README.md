@@ -153,7 +153,7 @@ That's the whole setup. Compose starts Ollama, pulls `llama3`,
 actually present, then serves the app at
 [http://localhost:8501](http://localhost:8501).
 
-The first run downloads roughly 6 GB of model weights and takes a while; every
+The first run downloads roughly 10 GB of model weights and takes a while; every
 run after that reuses the volume and starts in seconds. Models run on CPU by
 default — uncomment the `deploy:` block under the `ollama` service in
 `docker-compose.yml` to use an NVIDIA GPU.
@@ -364,6 +364,8 @@ See `requirements.txt` for the full pinned list.
 | [`docs/project-report.md`](docs/project-report.md) | What was built phase by phase, what is verified and how, measured performance, environment gotchas, and a step-by-step manual testing guide |
 | [`docs/architecture.md`](docs/architecture.md) | How the system fits together: components, the RAG pipeline, error-handling design, testing strategy, deployment, and known limitations |
 | [`DECISIONS.md`](DECISIONS.md) | Every non-obvious engineering choice, with the alternatives considered and why each was rejected |
+| [`eval/qa_pairs.csv`](eval/qa_pairs.csv) + [`docs/guides/`](docs/guides/) | The retrieval-accuracy evaluation set (25 hand-verified Q&A pairs across 9 documents, English and Macedonian) and the process used to build it |
+| [`docs/reports/`](docs/reports/) | Dated write-ups of individual bugs found and fixed, with what was verified live vs. by automated test |
 
 ---
 

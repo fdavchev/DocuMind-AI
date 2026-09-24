@@ -52,7 +52,7 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["/bin/sh", "-c"]
-    # ~6 GB on first run, cached in the volume afterwards.
+    # ~10 GB on first run, cached in the volume afterwards.
     command: >
       "ollama pull llama3 &&
        ollama pull nomic-embed-text-v2-moe &&
