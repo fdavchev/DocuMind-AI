@@ -11,6 +11,7 @@ running Ollama or a checked-in binary sample:
    similarity search without a live model.
 """
 
+import hashlib
 import io
 import math
 import sys
@@ -33,10 +34,13 @@ def _escape(text: str) -> str:
     return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
 
-def build_pdf_bytes(pages: list[str]) -> bytes:
+def build_pdf_bytes(
+    pages: list[str], title: str | None = None, author: str | None = None
+) -> bytes:
     """
     Returns the bytes of a valid PDF, one page per entry in `pages`.
     Newlines inside a page become separate text lines on that page.
+    `title` and `author`, when given, go into the PDF's document properties.
     """
     objects: list[bytes] = []          # objects[i] is object number i + 1
     page_object_numbers: list[int] = []
@@ -70,6 +74,15 @@ def build_pdf_bytes(pages: list[str]) -> bytes:
         + str(len(page_object_numbers)).encode() + b" >>"
     )
 
+    info_reference = b""
+    properties = {"Title": title, "Author": author}
+    entries = "".join(
+        f"/{key} ({_escape(value)}) " for key, value in properties.items() if value
+    )
+    if entries:
+        objects.append(f"<< {entries}>>".encode("latin-1"))
+        info_reference = b" /Info " + str(len(objects)).encode() + b" 0 R"
+
     out = bytearray(b"%PDF-1.4\n")
     offsets: list[int] = []
     for number, body in enumerate(objects, start=1):
@@ -83,7 +96,7 @@ def build_pdf_bytes(pages: list[str]) -> bytes:
         out += f"{offset:010d} 00000 n \n".encode()
     out += (
         b"trailer\n<< /Size " + str(len(objects) + 1).encode()
-        + b" /Root 1 0 R >>\nstartxref\n"
+        + b" /Root 1 0 R" + info_reference + b" >>\nstartxref\n"
         + str(xref_offset).encode() + b"\n%%EOF\n"
     )
     return bytes(out)
@@ -99,10 +112,15 @@ class UploadedPdf(io.BytesIO):
 
 @pytest.fixture
 def make_pdf():
-    """make_pdf(["page one text", "page two text"], name="report.pdf")"""
+    """make_pdf(["page one text", "page two text"], name="report.pdf", title="…")"""
 
-    def _make(pages: list[str], name: str = "test.pdf") -> UploadedPdf:
-        return UploadedPdf(build_pdf_bytes(pages), name)
+    def _make(
+        pages: list[str],
+        name: str = "test.pdf",
+        title: str | None = None,
+        author: str | None = None,
+    ) -> UploadedPdf:
+        return UploadedPdf(build_pdf_bytes(pages, title=title, author=author), name)
 
     return _make
 
@@ -119,11 +137,17 @@ class FakeEmbeddings(Embeddings):
     dimensions = 64
 
     def _vector(self, text: str) -> list[float]:
+        # Python's built-in hash() is randomised per process (PYTHONHASHSEED),
+        # so it isn't actually deterministic across test runs even though it
+        # looks like it should be — a word could land in a different bucket
+        # from one `pytest` invocation to the next, occasionally flipping
+        # which document ranks first. md5 has no such randomisation.
         vector = [0.0] * self.dimensions
         for word in text.lower().split():
             cleaned = "".join(ch for ch in word if ch.isalnum())
             if cleaned:
-                vector[hash(cleaned) % self.dimensions] += 1.0
+                bucket = int(hashlib.md5(cleaned.encode()).hexdigest(), 16) % self.dimensions
+                vector[bucket] += 1.0
         norm = math.sqrt(sum(value * value for value in vector))
         return [value / norm for value in vector] if norm else vector
 

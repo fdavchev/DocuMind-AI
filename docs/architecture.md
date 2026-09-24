@@ -24,7 +24,7 @@ graph LR
     U[User] --> S[Streamlit UI<br/>app.py]
     S --> P[RagPipeline<br/>LoaderFactory · TextSplitter<br/>VectorStore · LLMProvider]
     P --> O[Ollama runtime<br/>localhost:11434]
-    O --> M[(Local models<br/>llama3 · nomic-embed-text · llava)]
+    O --> M[(Local models<br/>llama3 · nomic-embed-text-v2-moe · llava)]
     P --> F[(FAISS index<br/>in process memory)]
 
     style O fill:#2d3748,color:#fff
@@ -94,7 +94,7 @@ graph TD
     D -- no --> Y[EmptyDocumentError — nothing readable]
     D -- yes --> E[TextSplitter: split each page separately<br/>500 chars, 50 overlap]
     E --> F[Chunks tagged<br/>source = filename, page = n]
-    F --> G[VectorStore: nomic-embed-text → vectors]
+    F --> G[VectorStore: nomic-embed-text-v2-moe → vectors]
     G --> H[(FAISS index)]
 ```
 
@@ -151,7 +151,10 @@ the budget forecast for the quarter
 
 The prompt instructs the model to answer only from this context, to cite the
 `[n]` markers inline, to say "I couldn't find that information in the document"
-when the answer is absent, and never to cite a number not listed. The answer
+when the answer is absent, and never to cite a number not listed. Its last line
+before `ANSWER:` names the language to answer in: Macedonian when most of the
+question's letters are Cyrillic, English otherwise. The not-found sentence
+switches with it (DECISIONS.md #21). The answer
 streams token by token to the UI, and the same numbered passages are rendered
 beneath it in a Sources panel.
 

@@ -3,6 +3,18 @@
 Plain-language notes on each class introduced during the object-oriented
 refactor: what it does, why it is built that way, and what it demonstrates.
 
+## VectorStore — chunks are embedded in batches (fix 09)
+
+`VectorStore.build` and `add` used to send every chunk to the embedding model
+in one request, which intermittently failed against a local Ollama on Windows
+once a document reached hundreds of chunks (792 in the report that exposed it).
+A private helper, `_embed_in_batches`, now embeds `AppConfig.embedding_batch_size`
+chunks (64) at a time and only then hands all the vectors to FAISS in one step,
+so a batch that fails leaves the index exactly as it was instead of half-built.
+This shows *encapsulation*: the batching lives inside the one class that owns
+FAISS, so `RagPipeline` and `app.py` still make a single `add(chunks)` call and
+never learn that batching exists (DECISIONS.md #17).
+
 ## OllamaProvider.stream_answer — temperature and max_tokens now applied (Phase 8 hardening)
 
 `stream_answer` is the method that generates answers for the PDF/RAG tab. Until

@@ -6,9 +6,9 @@
 # still carrying the file and page they were found on.
 #
 # HOW THE SEARCH WORKS:
-# Each chunk is turned into a vector (a list of ~768 numbers) by the
-# nomic-embed-text model running locally in Ollama, and the vectors are kept in
-# a FAISS index. A question is turned into a vector the same way, and FAISS
+# Each chunk is turned into a vector (a list of 768 numbers) by the
+# nomic-embed-text-v2-moe model running locally in Ollama, and the vectors are
+# kept in a FAISS index. A question is turned into a vector the same way, and FAISS
 # returns the chunks whose vectors sit closest to it. Think of every chunk as a
 # point in space: similar text lands nearby, and FAISS finds the nearest
 # neighbours fast.
@@ -40,6 +40,7 @@ from collections.abc import Sequence
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_ollama import OllamaEmbeddings
 
 from documind.config import AppConfig
@@ -51,6 +52,34 @@ from documind.documents.models import Chunk
 # several call sites.
 SOURCE_KEY = "source"
 PAGE_KEY = "page"
+
+
+class TaskPrefixedEmbeddings(Embeddings):
+    """
+    An embedding model that is told, on every call, which side of the search
+    a text is on.
+
+    nomic-embed-text-v2-moe was trained on inputs that start with a task
+    prefix, and its documentation asks for `search_document: ` on indexed passages and
+    `search_query: ` on questions. The prefix is added only on the way into the
+    model: FAISS stores and returns the passage text unchanged, so citations
+    and the prompt never see it.
+    """
+
+    def __init__(self, inner: Embeddings, document_prefix: str, query_prefix: str):
+        self._inner = inner
+        self._document_prefix = document_prefix
+        self._query_prefix = query_prefix
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """One vector per passage, each embedded as a document."""
+        return self._inner.embed_documents(
+            [self._document_prefix + text for text in texts]
+        )
+
+    def embed_query(self, text: str) -> list[float]:
+        """The question's vector, embedded as a query."""
+        return self._inner.embed_query(self._query_prefix + text)
 
 
 class VectorStore:
@@ -72,10 +101,15 @@ class VectorStore:
         Embeds every chunk into a brand new index, replacing anything held.
 
         This is the first upload's path; it takes a few seconds to half a minute
-        depending on the document's length and the machine.
+        depending on the document's length and the machine. The chunks reach the
+        embedding model in batches (see `_embed_in_batches`), but the index is
+        only replaced once every batch has succeeded.
         """
-        self._store = FAISS.from_documents(
-            documents=self._as_documents(chunks), embedding=self._resolve_embeddings()
+        documents = self._as_documents(chunks)
+        self._store = FAISS.from_embeddings(
+            text_embeddings=self._embed_in_batches(documents),
+            embedding=self._resolve_embeddings(),
+            metadatas=[document.metadata for document in documents],
         )
 
     def add(self, chunks: Sequence[Chunk]) -> None:
@@ -88,12 +122,20 @@ class VectorStore:
         builds it, so a caller never has to ask whether this upload is the first
         one — that question was the one branch the old procedural upload handler
         could get wrong.
+
+        Like `build`, it embeds in batches and changes the index only after the
+        last batch succeeds, so a failed upload leaves no partial document
+        behind.
         """
         if self._store is None:
             self.build(chunks)
             return
 
-        self._store.add_documents(self._as_documents(chunks))
+        documents = self._as_documents(chunks)
+        self._store.add_embeddings(
+            text_embeddings=self._embed_in_batches(documents),
+            metadatas=[document.metadata for document in documents],
+        )
 
     def remove(self, source_name: str) -> None:
         """
@@ -182,6 +224,27 @@ class VectorStore:
             for chunk in chunks
         ]
 
+    def _embed_in_batches(
+        self, documents: list[Document]
+    ) -> list[tuple[str, list[float]]]:
+        """
+        Each document's text paired with its vector, embedded a batch at a time.
+
+        One request carrying hundreds of texts intermittently fails against a
+        local Ollama on Windows, while the same texts sent in batches of 64
+        succeed (DECISIONS.md #17). Only the embedding calls are split: the
+        vectors are collected first and handed to FAISS in one step, so a batch
+        that fails leaves the index exactly as it was.
+        """
+        embeddings = self._resolve_embeddings()
+        batch_size = self._config.embedding_batch_size
+        texts = [document.page_content for document in documents]
+
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(embeddings.embed_documents(texts[start:start + batch_size]))
+        return list(zip(texts, vectors))
+
     def _as_chunk(self, document: Document) -> Chunk:
         """
         A retrieved LangChain Document back as one of our Chunks.
@@ -200,8 +263,14 @@ class VectorStore:
     # ── Small decisions the caller should not have to make ────────────────────
 
     def _resolve_embeddings(self):
+        # Only the real model gets the task prefixes: an injected model (the
+        # tests' FakeEmbeddings) is used exactly as it was handed in.
         if self._embeddings is None:
-            self._embeddings = OllamaEmbeddings(model=self._config.embedding_model)
+            self._embeddings = TaskPrefixedEmbeddings(
+                OllamaEmbeddings(model=self._config.embedding_model),
+                document_prefix=self._config.embedding_document_prefix,
+                query_prefix=self._config.embedding_query_prefix,
+            )
         return self._embeddings
 
     def _resolve_k(self, k: int | None) -> int:

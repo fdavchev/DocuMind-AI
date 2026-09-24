@@ -1,0 +1,34 @@
+id,document,answer_page,question,correct_answer,notes
+1,working anytime anywhere-TJ0126015ENN.pdf,4,Who is the research manager for this report?,Oscar Vargas Llave.,
+2,working anytime anywhere-TJ0126015ENN.pdf,14,How are your working time arrangements set?,"According to the context [2] ""Working time arrangement"" on page 91: ""You can choose between several fixed working schedules determined by the company/organisation."" So the correct answer is: b. You can choose between several fixed working schedules determined by the company/organisation",
+3,working anytime anywhere-TJ0126015ENN.pdf,14,Do you have fixed start and finish times? (Yes/no.),"Yes [2] , The response ""Yes"" is based on the information provided in passage [2] which states that 74% of respondents had a fixed start and finish time while 34% had flexible start and finish times.",
+4,working anytime anywhere-TJ0126015ENN.pdf,37,Differences between women and men keep it super short,Women consistently work fewer hours on average than men [1]. Men are also more likely to report long working weeks overwork and put in longer hours when teleworking [3]. Additionally 27% of men report working very long hours compared to 20% of women [3].,
+
+5,2609.28470v1.pdf,1,What is the title of this paper?,The title of this paper is "StudentBench: AI and human tutoring yield equivalent GRE learning gains".,
+6,2609.28470v1.pdf,1,Who is the first author of this paper?,The first authors of this paper are Curtis Northcutt and Inaara Hasmani as they are listed as the authors in the DOCUMENT context provided.,
+7,2609.28470v1.pdf,1,How many student-AI messages did the platform collect?,According to [1] the platform collected "175000 student–AI messages".,
+8,2609.28470v1.pdf,4,How many questions were on each assessment?,27 questions (47 minutes for Quantitative and 41 minutes for Verbal).,Known retrieval limitation - answer sentence spans the page 3/4 boundary; see docs/reports/2026-09-24-title-and-macedonian-retrieval-fixes.md
+
+9,2609.28371v1.pdf,1,What is the title of this paper?,Based on the provided document context I can answer your question: The title of this paper is "Memory-Conditioned Diffusion Model for Generalized Langevin Dynamics" [1].,
+10,2609.28371v1.pdf,1,What is the first author's affiliation?,"Fusion Energy Division, Oak Ridge National Laboratory, Oak Ridge, TN, USA.",
+11,2609.28371v1.pdf,3,What is described as the paper's central contribution?,According to [1] the central contribution is a compact recursively updated memory representation that enables conditional generative flow maps to preserve long-time dependence without conditioning on long observation windows.,
+
+12,Кошарка.pdf,1,Кој ја измислил кошарката и во која година?,"Кошарката ја измислил Џејмс Нејсмит [1] во 1891 година.",
+13,Кошарка.pdf,1,На која висина е монтиран кошот?,3.05 метри [1],
+14,Кошарка.pdf,2,Каде Најсмит ja развил кошарката?,"Нејсмит ја развил кошарката на Универзитетот МекГил од Монтреал и инструктор во Вежбалното училиште YMCA (денес Спрингфилд Колеџ), во Спрингфилд, [2].",
+
+15,the green city accord-KH0126048ENN.pdf,3,By how much did premature deaths attributable to air pollution fall between 2005 and 2023?,By around 57%.,
+16,the green city accord-KH0126048ENN.pdf,4,How many cities have signed the Green City Accord since 2020?,"132 cities, across 23 Member States.",
+17,the green city accord-KH0126048ENN.pdf,5,"When did Alessandro Ghinelli, Mayor of Arezzo, sign the Green City Accord?","April 30, 2021.",
+
+18,Одбојка.pdf,1,Колку играчи има во еден тим при одбојка?,Шест играчи [2].,
+19,Одбојка.pdf,2,На која висина е поставена мрежата?,Мрежата е поставена на височина од 1.98 m над главата на еден просечен маж [1].,
+
+20,ohrid-scanned-en.pdf,1,What was Ohrid's population as of 2021?,According to [1] ohrid-scanned-en.pdf p. 1 "Ohrid (Macedonian: Охрид [oxrit] а) is a city in North Macedonia and is the seat of the Ohrid Municipality. It is the largest city on Lake Ohrid and the eighth-largest city in the country with it recording a population of over 38.000 inhabitants as of 2021."So the answer is: over 38.000.,
+21,ohrid-scanned-en.pdf,1,What nickname is Ohrid given?,Ohrid is referred to as the "Jerusalem of the Balkans" [4].,
+
+22,ohrid-scanned-mk.pdf,1,Колку жители има Охрид според пописот од 2021 година?,38.818 житепи [2],
+23,ohrid-scanned-mk.pdf,1,Во која година Охридскиот Регион е вклучен во светското наследство на УНЕСКО?,1979 [2].,
+
+24,fudbal-scanned-mk.pdf,1,Колку трае еден фудбалски натпревар?,90 минути односно две полувремиња по 45 минути со одмор меѓу нив во траење од 15 минути [1].,
+25,fudbal-scanned-mk.pdf,1,Од која далечина се изведува пенал ударот?,Ударот се испопнува од специјална определена точка во казнениот простор кој се наоѓа на 11 метри од голманот [2].,

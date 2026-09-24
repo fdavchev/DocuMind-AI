@@ -65,12 +65,15 @@ class TextSplitter:
         That provenance is what survives into the vector store and comes back at
         retrieval time, which is how an answer can say "p. 4 of report.pdf".
         Each page is split on its own, so no chunk can span two pages.
+        Fragments with fewer than `AppConfig.min_chunk_letters` letters (a
+        stray bracket, a page number) are left out: they carry no meaning of
+        their own, yet their vectors land close to almost any question.
         """
         chunks: list[Chunk] = []
 
         for page in document.pages:
             for text in self.split_text(page.text):
-                if not text.strip():
+                if not self._has_enough_letters(text):
                     continue
                 chunks.append(
                     Chunk(
@@ -90,3 +93,8 @@ class TextSplitter:
         plain-text path that has no page numbers to carry.
         """
         return self._splitter.split_text(text)
+
+    def _has_enough_letters(self, text: str) -> bool:
+        # isalpha() is Unicode-aware, so Cyrillic counts the same as Latin.
+        letter_count = sum(1 for character in text if character.isalpha())
+        return letter_count >= self._config.min_chunk_letters

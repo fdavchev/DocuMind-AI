@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 from pathlib import PurePath
 
 from documind.config import AppConfig
-from documind.documents.models import Document, ExtractedPage
+from documind.documents.models import Document, DocumentMetadata, ExtractedPage
 from errors import EmptyDocumentError, UnsupportedFileError
 
 
@@ -72,7 +72,11 @@ class DocumentLoader(ABC):
         if not self.supports(name):
             raise UnsupportedFileError(name, self.SUPPORTED_EXTENSIONS)
 
-        document = Document(name=name, pages=tuple(self._extract_pages(file)))
+        document = Document(
+            name=name,
+            pages=tuple(self._extract_pages(file)),
+            metadata=self._read_metadata(file),
+        )
 
         if document.is_empty:
             raise EmptyDocumentError(name)
@@ -87,3 +91,13 @@ class DocumentLoader(ABC):
         Returns the pages that yielded usable text, in order, 1-based. Pages
         with nothing on them are left out rather than returned empty.
         """
+
+    def _read_metadata(self, file) -> DocumentMetadata:
+        """
+        The title and authors the file declares about itself.
+
+        Most file types declare nothing, so the default is an empty
+        DocumentMetadata; a loader whose format has document properties
+        overrides this.
+        """
+        return DocumentMetadata()

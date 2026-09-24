@@ -42,6 +42,7 @@ def pipeline(fake_embeddings):
     """The same object graph app.py builds at startup."""
     config = AppConfig()
     return RagPipeline(
+        config=config,
         loader_factory=LoaderFactory(config),
         splitter=TextSplitter(config),
         vector_store=VectorStore(config, embeddings=fake_embeddings),
