@@ -11,6 +11,8 @@ and make no network call — including the case that matters most on a strange
 machine: the app must come up cleanly when Ollama is not running at all.
 """
 
+from pathlib import Path
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -19,8 +21,10 @@ import errors
 from config import CHAT_MODE, PDF_MODE
 from conftest import FakeEmbeddings, build_pdf_bytes
 from documind.llm import OllamaProvider
+from documind.ocr.models import OcrResult
+from documind.ocr.ocr_engine import OcrEngine
 
-APP = str((__import__("pathlib").Path(__file__).resolve().parent.parent / "app.py"))
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
 class FakeListResponse:
@@ -268,6 +272,47 @@ def test_a_mode_switch_does_not_read_as_deselecting_every_pdf(pdf_mode_app):
 
     assert not at.exception
     assert at.session_state.vector_store.sources == ("finance.pdf",)
+
+
+# ── OCR confidence is surfaced after an upload ────────────────────────────────
+
+SCANNED_PDF = (
+    "scanned.pdf",
+    (Path(__file__).resolve().parent.parent / "samples" / "scanned.pdf").read_bytes(),
+    "application/pdf",
+)
+
+
+def _ocr_reads_every_page_with(monkeypatch, confidence: float) -> None:
+    # The real OcrEngine class, with Tesseract replaced, so the app script
+    # builds its loaders exactly as it does live and only the reading is faked.
+    monkeypatch.setattr(OcrEngine, "is_available", lambda self: True)
+    monkeypatch.setattr(
+        OcrEngine,
+        "recognise",
+        lambda self, image: OcrResult("the invoice total is due in March", confidence),
+    )
+
+
+def test_a_low_confidence_scanned_page_is_warned_about(monkeypatch, pdf_mode_app):
+    _ocr_reads_every_page_with(monkeypatch, 42.0)
+
+    at = pdf_mode_app.file_uploader[0].set_value([SCANNED_PDF]).run()
+
+    assert not at.exception
+    assert [w.value for w in at.warning] == [
+        "Page 1 was recognised with 42% confidence — the answer may be unreliable."
+    ]
+
+
+def test_a_confidently_read_scanned_page_is_not_warned_about(monkeypatch, pdf_mode_app):
+    _ocr_reads_every_page_with(monkeypatch, 83.3)
+
+    at = pdf_mode_app.file_uploader[0].set_value([SCANNED_PDF]).run()
+
+    assert not at.exception
+    assert at.session_state.vector_store.sources == ("scanned.pdf",)
+    assert not at.warning, [w.value for w in at.warning]
 
 
 def test_clearing_documents_empties_the_uploader_so_nothing_is_reindexed(pdf_mode_app):

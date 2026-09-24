@@ -415,3 +415,17 @@ is ever filled in: a page read by OCR carries the engine's confidence score, and
 a page with its own text layer keeps `None`. The principle on show is dependency
 injection: `PdfLoader` depends on an object it is given, not on a function it
 reaches for.
+
+## Low-confidence OCR pages are shown as warnings
+
+`OcrEngine` now averages confidence only over boxes that actually contain a
+recognised word, because Tesseract also gives high scores to empty boxes, which
+made a page with almost no text look confidently read. `IngestReport` gained
+`ocr_confidences`, a list of `(page number, confidence)` for every page read by
+OCR, which `RagPipeline.ingest()` fills in from the pages the loader returned.
+`app.py` then shows a warning such as "Page 1 was recognised with 42%
+confidence — the answer may be unreliable." for each page below
+`AppConfig.ocr_min_confidence`; the pipeline reports every page and the UI
+chooses which ones to warn about, because deciding what the user sees is the
+UI's job. No new OO principle is shown here; this is data travelling through
+objects that already exist, which is what the earlier design was built to allow.

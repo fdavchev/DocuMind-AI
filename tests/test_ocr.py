@@ -14,11 +14,13 @@ behind the loader's back.
 
 import pdfplumber.page
 import pytest
+from PIL import Image
 
 import ocr
 from documind.config import AppConfig
 from documind.documents.pdf_loader import PdfLoader
 from documind.documents.text_splitter import TextSplitter
+from documind.ocr.ocr_engine import OcrEngine
 from errors import (
     EmptyDocumentError,
     NoTextInPdf,
@@ -306,3 +308,38 @@ def test_ocr_page_calls_pytesseract_with_the_rendered_image(monkeypatch):
 
     assert ocr.ocr_page(Page()) == "scanned words"
     assert resolutions == [ocr.OCR_RESOLUTION]
+
+
+def _tesseract_reads(monkeypatch, text: list[str], conf: list[float]) -> None:
+    """Makes pytesseract.image_to_data return this dict, without a binary."""
+    pytesseract = pytest.importorskip("pytesseract")
+    monkeypatch.setattr(ocr, "is_available", lambda: True)
+    monkeypatch.setattr(
+        pytesseract,
+        "image_to_data",
+        lambda image, lang, output_type: {"text": text, "conf": conf},
+    )
+
+
+def test_confidence_ignores_boxes_with_no_recognised_text(monkeypatch):
+    # Layout entries at -1, empty and whitespace boxes scored 95, and two real
+    # words at 80 and 60: only the two words may count.
+    _tesseract_reads(
+        monkeypatch,
+        text=["", "", "", "Hello", "world", " ", ""],
+        conf=[-1, -1, -1, 80, 60, 95, 95],
+    )
+
+    result = OcrEngine(AppConfig()).recognise(Image.new("RGB", (40, 40), "white"))
+
+    assert result.text == "Hello world"
+    assert result.confidence == 70.0
+
+
+def test_a_page_with_only_empty_boxes_has_zero_confidence(monkeypatch):
+    _tesseract_reads(monkeypatch, text=["", " ", ""], conf=[-1, 95, 95])
+
+    result = OcrEngine(AppConfig()).recognise(Image.new("RGB", (40, 40), "white"))
+
+    assert result.text == ""
+    assert result.confidence == 0.0

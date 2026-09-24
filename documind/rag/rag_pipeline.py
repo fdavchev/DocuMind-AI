@@ -60,6 +60,12 @@ class IngestReport:
     "~10-30 seconds". Returning them as one object means the caller gets the
     whole outcome of an ingest rather than a loose `len(chunks)`, and a later
     phase measuring performance already has the numbers it needs.
+
+    `ocr_confidences` holds one `(page_number, confidence)` pair per page that
+    was read by OCR, in page order. It is every such page, not only the
+    doubtful ones: what counts as too low to trust is the UI's call, made with
+    `AppConfig.ocr_min_confidence`, so the pipeline reports the facts and needs
+    no threshold of its own.
     """
 
     document_name: str
@@ -67,6 +73,7 @@ class IngestReport:
     chunk_count: int
     ocr_page_count: int
     elapsed_seconds: float
+    ocr_confidences: tuple[tuple[int, float], ...] = ()
 
     @property
     def used_ocr(self) -> bool:
@@ -126,6 +133,11 @@ class RagPipeline:
             chunk_count=len(chunks),
             ocr_page_count=document.ocr_page_count,
             elapsed_seconds=time.perf_counter() - started,
+            ocr_confidences=tuple(
+                (page.number, page.ocr_confidence)
+                for page in document.pages
+                if page.used_ocr and page.ocr_confidence is not None
+            ),
         )
 
     # ── Answering a question about them ───────────────────────────────────────

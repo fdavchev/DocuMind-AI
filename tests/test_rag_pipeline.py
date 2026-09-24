@@ -6,6 +6,8 @@ TextSplitter and VectorStore — real pdfplumber, real chunking, real FAISS — 
 substitute only the two things that would need a server: the embedding model
 (the deterministic `fake_embeddings` fixture) and the language model (the
 `FakeProvider` below, which implements LLMProvider and replays canned tokens).
+The OCR-confidence tests also stand in for Tesseract, with conftest's
+FakeOcrEngine handed to the PDF loader by `PdfLoaderFactoryWithOcr`.
 That substitution is the point of the seams built in the earlier steps, and it
 is why this file runs offline.
 """
@@ -18,6 +20,7 @@ import pytest
 from documind.config import AppConfig
 from documind.documents.loader_factory import LoaderFactory
 from documind.documents.models import Chunk
+from documind.documents.pdf_loader import PdfLoader
 from documind.documents.text_splitter import TextSplitter
 from documind.llm.llm_provider import LLMProvider
 from documind.rag.rag_pipeline import IngestReport, RagPipeline
@@ -56,6 +59,17 @@ class FakeProvider(LLMProvider):
     def stream_answer(self, prompt):
         self.prompts.append(prompt)
         return iter(self.tokens)
+
+
+class PdfLoaderFactoryWithOcr(LoaderFactory):
+    """A factory whose PDF loaders read scanned pages with the given OCR engine."""
+
+    def __init__(self, config: AppConfig, ocr_engine):
+        super().__init__(config)
+        self._ocr_engine = ocr_engine
+
+    def create_loader(self, filename: str):
+        return PdfLoader(self._config, ocr_engine=self._ocr_engine)
 
 
 @pytest.fixture
@@ -122,6 +136,47 @@ def test_a_report_without_ocr_says_so(pipeline, make_pdf):
     report = pipeline.ingest(make_pdf(["a page with a real text layer"]))
 
     assert report.used_ocr is False
+
+
+def test_a_report_without_ocr_has_no_ocr_confidences(pipeline, make_pdf):
+    report = pipeline.ingest(make_pdf(["a page with a real text layer"]))
+
+    assert report.ocr_confidences == ()
+
+
+def _pipeline_reading_scans_with(ocr_engine, provider, fake_embeddings) -> RagPipeline:
+    config = AppConfig()
+    return RagPipeline(
+        loader_factory=PdfLoaderFactoryWithOcr(config, ocr_engine),
+        splitter=TextSplitter(config),
+        vector_store=VectorStore(config, embeddings=fake_embeddings),
+        provider=provider,
+    )
+
+
+def test_a_report_gives_each_ocr_pages_confidence_in_page_order(
+    fake_ocr_engine, provider, fake_embeddings, make_pdf
+):
+    fake_ocr_engine.confidence = 42.0
+    text_page = "a page with a proper text layer on it"
+    pipeline = _pipeline_reading_scans_with(fake_ocr_engine, provider, fake_embeddings)
+
+    report = pipeline.ingest(make_pdf([text_page, "", text_page, ""]))
+
+    assert report.ocr_confidences == ((2, 42.0), (4, 42.0))
+
+
+def test_a_report_lists_confident_ocr_pages_too(
+    fake_ocr_engine, provider, fake_embeddings, make_pdf
+):
+    # The pipeline reports facts; filtering by AppConfig.ocr_min_confidence is
+    # the UI's decision, so a page well above it is still listed.
+    fake_ocr_engine.confidence = 99.0
+    pipeline = _pipeline_reading_scans_with(fake_ocr_engine, provider, fake_embeddings)
+
+    report = pipeline.ingest(make_pdf([""]))
+
+    assert report.ocr_confidences == ((1, 99.0),)
 
 
 def test_a_report_cannot_be_edited_after_the_fact():

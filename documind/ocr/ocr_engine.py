@@ -77,9 +77,16 @@ class OcrEngine:
 
         words = [word for word in data["text"] if word.strip()]
 
-        # Tesseract reports -1 for layout entries (blocks, paragraphs, lines)
-        # that are not words; counting them would drag every mean down.
-        confidences = [conf for conf in data["conf"] if conf >= 0]
+        # Only entries that carry a recognised word count. Layout entries
+        # (blocks, paragraphs, lines) report -1, which would drag the mean down,
+        # and Tesseract also scores boxes whose text is empty or whitespace,
+        # often highly, which would make a page with little real text look
+        # confidently read.
+        confidences = [
+            conf
+            for word, conf in zip(data["text"], data["conf"])
+            if word.strip() and conf >= 0
+        ]
         mean_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
         return OcrResult(" ".join(words), float(mean_confidence))
