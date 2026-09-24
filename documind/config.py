@@ -60,9 +60,10 @@ class AppConfig:
     # than this many scanned pages is refused rather than started.
     max_ocr_pages: int = 50
 
-    # The Tesseract language pack OCR reads with. Only "eng" is installed on the
-    # development machine today; Macedonian is "mkd" once its pack is added.
-    ocr_language: str = "eng"
+    # The Tesseract language pack(s) OCR reads with. "mkd+eng" needs the
+    # Macedonian traineddata installed (TESSDATA_PREFIX must point at a
+    # tessdata folder containing mkd.traineddata) — see docs/guides/ for setup.
+    ocr_language: str = "mkd+eng"
 
     # Mean word confidence (0-100) below which a recognised page is treated as
     # unreliable.

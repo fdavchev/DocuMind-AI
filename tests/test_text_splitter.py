@@ -30,6 +30,14 @@ def _splitter(**overrides) -> TextSplitter:
     return TextSplitter(dataclasses.replace(AppConfig(), **overrides))
 
 
+def _shared_edge_length(first: str, second: str) -> int:
+    """How many characters at the end of `first` reappear at the start of `second`."""
+    for length in range(min(len(first), len(second)), 0, -1):
+        if first[-length:] == second[:length]:
+            return length
+    return 0
+
+
 # ── The page-boundary invariant (DECISIONS.md #1) ──────────────────────────────
 
 def test_no_chunk_spans_two_pages():
@@ -124,6 +132,24 @@ def test_a_smaller_configured_size_produces_more_chunks():
 
     assert len(narrow) > len(wide)
     assert all(len(chunk.text) <= 100 for chunk in narrow)
+
+
+def test_consecutive_chunks_overlap_by_at_most_the_configured_amount():
+    # RecursiveCharacterTextSplitter only cuts on whole separator units (here,
+    # whole words), so the shared text at a chunk boundary is trimmed to the
+    # nearest word and is rarely exactly chunk_overlap — it is guaranteed to be
+    # no more than that.
+    long_page = " ".join(f"word{i:03d}" for i in range(200))
+    chunk_overlap = 20
+
+    chunks = _splitter(chunk_size=100, chunk_overlap=chunk_overlap).split(
+        _document((1, long_page))
+    )
+
+    assert len(chunks) > 2
+    for first, second in zip(chunks, chunks[1:]):
+        overlap = _shared_edge_length(first.text, second.text)
+        assert 0 < overlap <= chunk_overlap
 
 
 def test_split_text_cuts_a_bare_string_with_no_provenance():
